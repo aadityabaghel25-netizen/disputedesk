@@ -27,6 +27,8 @@ services:
         value: nvidia/nemotron-3-super-120b-a12b
       - key: AGENT_MODEL
         value: zai-org/GLM-5.3
+      - key: GNANI_API_KEY
+        sync: false
       - key: AI_RUNS_PER_HOUR
         value: "30"
       - key: ADMIN_USER

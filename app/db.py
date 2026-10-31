@@ -12,6 +12,7 @@ Tables:
   audit     an append-only, hash-chained log of everything that happened
   rules     seller rules edited in the UI (override the .env defaults)
   blocks    planned work on a dispute, for the deadline board (internal; never sent to PayPal)
+  calls     the seller's call recordings as transcripts (audio is never stored). dispute_id '' = not matched yet
 """
 
 import hashlib
@@ -63,6 +64,19 @@ CREATE TABLE IF NOT EXISTS rules (
     name         TEXT PRIMARY KEY,
     value        TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS calls (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    dispute_id   TEXT NOT NULL,
+    created_at   TEXT NOT NULL,
+    actor        TEXT NOT NULL,
+    party        TEXT NOT NULL,
+    call_date    TEXT NOT NULL,
+    transcript   TEXT NOT NULL,
+    origin       TEXT NOT NULL,
+    audio_sha256 TEXT,
+    filename     TEXT NOT NULL DEFAULT '',
+    matched_on   TEXT NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS audit (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     ts           TEXT NOT NULL,
@@ -89,6 +103,10 @@ class DB:
         self.lock = threading.Lock()   # the web server may run background jobs in parallel
         with self.lock:
             self.conn.executescript(SCHEMA)
+            cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(calls)")}
+            for col in ("filename", "matched_on"):   # databases made before the recording library
+                if col not in cols:
+                    self.conn.execute(f"ALTER TABLE calls ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
             self.conn.commit()
 
     def close(self) -> None:
@@ -159,6 +177,38 @@ class DB:
         return [{"id": r["evidence_id"], "kind": r["kind"], "source": r["source"],
                  "trusted": bool(r["trusted"]), "summary": r["summary"],
                  "content": json.loads(r["content"])} for r in rows]
+
+    # -- calls ---------------------------------------------------------------
+
+    def add_call(self, actor: str, party: str, call_date: str, transcript: str, origin: str,
+                 audio_sha256: str | None, filename: str = "") -> int:
+        with self.lock:
+            cur = self.conn.execute(
+                "INSERT INTO calls (dispute_id, created_at, actor, party, call_date, transcript, origin, audio_sha256, filename) "
+                "VALUES ('',?,?,?,?,?,?,?,?)", (now_iso(), actor, party, call_date, transcript, origin, audio_sha256, filename))
+            self.conn.commit()
+            return cur.lastrowid
+
+    def list_calls(self, dispute_id: str) -> list[dict]:
+        rows = self.conn.execute("SELECT * FROM calls WHERE dispute_id=? ORDER BY id", (dispute_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def all_calls(self) -> list[dict]:
+        return [dict(r) for r in self.conn.execute("SELECT * FROM calls ORDER BY id DESC").fetchall()]
+
+    def get_call(self, call_id: int) -> dict | None:
+        row = self.conn.execute("SELECT * FROM calls WHERE id=?", (call_id,)).fetchone()
+        return dict(row) if row else None
+
+    def assign_call(self, call_id: int, dispute_id: str, matched_on: str) -> None:
+        with self.lock:
+            self.conn.execute("UPDATE calls SET dispute_id=?, matched_on=? WHERE id=?", (dispute_id, matched_on, call_id))
+            self.conn.commit()
+
+    def delete_call(self, call_id: int) -> None:
+        with self.lock:
+            self.conn.execute("DELETE FROM calls WHERE id=?", (call_id,))
+            self.conn.commit()
 
     # -- analyses ------------------------------------------------------------
 

@@ -3,6 +3,8 @@ The "glue" layer: connects PayPal, the shop data, the AI team, the database and
 the human approval step. The web routes in main.py stay thin and call these.
 """
 
+import hashlib
+import re
 import threading
 import time
 import traceback
@@ -12,7 +14,7 @@ from . import agents, core, evidence
 from .config import Settings
 from .db import DB, now_iso
 from .demo import DemoPayPal
-from .llm import FakeLLM, OpenAICompatibleLLM
+from .llm import FakeLLM, LLMError, OpenAICompatibleLLM, gnani_transcribe
 from .paypal import PayPal, PayPalError
 
 DISPUTE_EVENTS = ("CUSTOMER.DISPUTE.CREATED", "CUSTOMER.DISPUTE.UPDATED", "CUSTOMER.DISPUTE.RESOLVED")
@@ -199,11 +201,14 @@ class Service:
 
     def seed_demo(self) -> None:
         """A first-time visitor in demo mode should see a working product, not an empty table."""
-        if not self.demo or self.db.list_disputes():
+        if not self.demo:
             return
-        self.sync()
-        for d in self.db.list_disputes():
-            self.analyze_quietly(d["dispute_id"])
+        first_visit = not self.db.list_disputes()
+        if first_visit:
+            self.sync()
+        fresh = self.add_sample_recordings() if not self.db.all_calls() else []
+        for dispute_id in ([d["dispute_id"] for d in self.db.list_disputes()] if first_visit else fresh):
+            self.analyze_quietly(dispute_id)
 
     def start_watcher(self) -> None:
         minutes = self.settings.watch_minutes
@@ -340,7 +345,9 @@ class Service:
             if not dispute:
                 dispute = self.pp.get_dispute(dispute_id)
                 self.db.upsert_dispute(dispute)
-            result, items = agents.analyze(dispute, self.pp, self.store, self.llm, self.settings)
+            self.select_recordings()
+            result, items = agents.analyze(dispute, self.pp, self.store, self.llm, self.settings,
+                                           calls=self.db.list_calls(dispute_id))
             self.db.replace_evidence(dispute_id, items)
             aid = self.db.save_analysis(dispute_id, result)
             self.db.audit("ai", "analysis", dispute_id, {
@@ -359,6 +366,130 @@ class Service:
             self.analyze(dispute_id)
         except Exception:
             pass   # already written to the audit log
+
+    # -- call recordings: the library the onboarding agent selects from. Nothing here can write to PayPal. ----
+
+    CALL_PARTIES = ("buyer", "carrier")
+    MAX_TRANSCRIPT = 8000
+    MAX_AUDIO = 10_000_000   # Gnani's limit for a file sent directly
+    SAMPLE_RECORDINGS = (
+        ("DD-1003-buyer.mp3", "buyer", "Agent: Thanks for calling about order DD-1003. This call is recorded, is that okay?\nCustomer: Yes, that's fine.\n"
+                                       "Agent: Did the keychain reach you?\nCustomer: A parcel did come last week but I haven't opened it yet."),
+        ("DD-1003-driver.mp3", "carrier", "Seller: Hi, this call is recorded, is that okay?\nDriver: Sure, no problem.\n"
+                                          "Seller: Do you remember this parcel?\nDriver: I think I left it at the front door."),
+        ("DD-1001-buyer.mp3", "buyer", "Agent: This call is recorded, is that okay?\nBuyer: Yes, go ahead.\n"
+                                       "Agent: Have you found the tote?\nBuyer: It never came and my neighbour has not seen it."),
+        ("call-0412.mp3", "buyer", "Agent: This call is recorded, is that okay?\nBuyer: Yes, that's fine.\n"
+                                   "Agent: Which order is this about?\nBuyer: I don't have the number with me right now."),
+    )
+
+    def _case_references(self, dispute: dict) -> list[tuple[str, str]]:
+        tx = (dispute.get("disputed_transactions") or [{}])[0]
+        invoice = tx.get("invoice_number") or tx.get("custom")
+        refs = [(f"case {dispute['dispute_id']}", dispute["dispute_id"])]
+        shop = self.store.order(invoice)
+        if invoice:
+            refs.append((f"order {invoice}", invoice))
+        if shop:
+            refs.append(("the tracking number", shop["shipment"].get("tracking_number")))
+            refs.append(("the buyer's email", shop["buyer"].get("email")))
+        return refs
+
+    def select_recordings(self) -> list[str]:
+        """Attach each unmatched recording to the one open case it mentions. Plain code, not AI: a wrong guess would
+        put a stranger's call in a case. No reference, or more than one case, stays for the seller. Returns case ids."""
+        cases = [d for d in self.db.list_disputes() if not core.dispute_outcome(d)]
+        selected = []
+        for call in self.db.list_calls(""):
+            text = f"{call['filename']}\n{call['transcript']}"
+            hits = {d["dispute_id"]: label for d in cases if (label := core.find_reference(text, self._case_references(d)))}
+            if len(hits) == 1:
+                (dispute_id, label), = hits.items()
+                self.db.assign_call(call["id"], dispute_id, label)
+                self.db.audit("system", "call_selected", dispute_id, {"call_id": call["id"], "matched_on": label})
+                selected.append(dispute_id)
+        return list(dict.fromkeys(selected))
+
+    def _listen_for(self) -> list[str]:
+        """Order numbers, tracking numbers, items and carriers on open cases, so speech-to-text hears them right.
+        These also let the recording find its case. No buyer names or emails are sent."""
+        terms = []
+        for d in self.db.list_disputes():
+            if core.dispute_outcome(d):
+                continue
+            tx = (d.get("disputed_transactions") or [{}])[0]
+            invoice = tx.get("invoice_number") or tx.get("custom")
+            shop = self.store.order(invoice) or {}
+            ship = shop.get("shipment") or {}
+            terms += [invoice, ship.get("tracking_number"), shop.get("item"), ship.get("carrier")]
+        return list(dict.fromkeys(t for t in terms if t and t != "OTHER"))
+
+    def transcribe_call(self, audio: bytes, filename: str, actor: str) -> tuple[str, str]:
+        """Returns (draft transcript, audio fingerprint). The draft isn't evidence until the seller
+        checks it, labels the speakers and confirms consent. The audio is not kept."""
+        if not self.settings.gnani_api_key:
+            raise ActionError("Speech-to-text isn't set up. Paste the transcript instead.")
+        if not audio or len(audio) > self.MAX_AUDIO:
+            raise ActionError("Choose an audio file under 10 MB.")
+        if not self.allow_ai_run():
+            raise ActionError("The demo has reached its hourly AI limit. Please try later.")
+        try:
+            text = gnani_transcribe(self.settings.gnani_api_key, self.settings.gnani_model, self.settings.gnani_language, audio, filename,
+                                    keyterms=self._listen_for())
+        except LLMError as e:
+            raise ActionError(str(e)) from None
+        fingerprint = hashlib.sha256(audio).hexdigest()
+        self.db.audit(actor, "call_transcribed", None, {"provider": "gnani", "model": self.settings.gnani_model, "audio_sha256": fingerprint})
+        return text, fingerprint
+
+    def add_call(self, form: dict, actor: str, origin: str | None = None) -> list[str]:
+        """Save a checked recording to the library, then let code select its case. Returns the case ids it selected."""
+        if form.get("consent") != "yes":
+            raise ActionError("Confirm that everyone on the call agreed to recording. Some US states, including California, require this.")
+        party = form.get("party")
+        if party not in self.CALL_PARTIES:
+            raise ActionError("Choose who the call was with.")
+        day = core.parse_time(form.get("call_date") or "")
+        if not day or day.date() > datetime.now(timezone.utc).date():
+            raise ActionError("Enter the date of the call. It can't be in the future.")
+        transcript = (form.get("transcript") or "").strip()
+        for n in (1, 2):   # the seller's choices from the speaker menus
+            who = form.get(f"speaker_{n}")
+            if who and who.lower() in core.SPEAKER_ROLES:
+                transcript = re.sub(rf"(?im)^\s*Speaker {n}\s*:", f"{who}:", transcript)
+        if len(transcript) > self.MAX_TRANSCRIPT:
+            raise ActionError(f"Keep the transcript under {self.MAX_TRANSCRIPT} characters.")
+        try:
+            core.parse_call_turns(transcript)
+        except ValueError as e:
+            raise ActionError(str(e)) from None
+        fingerprint = form.get("audio_sha256") or None
+        origin = origin or ("Gnani speech-to-text, checked by the seller" if fingerprint else "transcript from the seller")
+        call_id = self.db.add_call(actor, party, day.date().isoformat(), transcript, origin, fingerprint, (form.get("filename") or "")[:120])
+        self.db.audit(actor, "call_added", None, {"call_id": call_id, "party": party, "consent_confirmed": True,
+                                                  "sha256": hashlib.sha256(transcript.encode()).hexdigest()})
+        return self.select_recordings()
+
+    def add_sample_recordings(self) -> list[str]:
+        day, selected = (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat(), []
+        for filename, party, transcript in self.SAMPLE_RECORDINGS:
+            selected += self.add_call({"consent": "yes", "party": party, "call_date": day, "transcript": transcript, "filename": filename},
+                                      "demo", origin="made-up sample for the demo")
+        return list(dict.fromkeys(selected))
+
+    def assign_recording(self, call_id: int, dispute_id: str, actor: str) -> None:
+        if not self.db.get_call(call_id) or not self.db.get_dispute(dispute_id):
+            raise ActionError("That recording or case no longer exists.")
+        self.db.assign_call(call_id, dispute_id, "your choice")
+        self.db.audit(actor, "call_selected", dispute_id, {"call_id": call_id, "matched_on": "seller"})
+
+    def remove_call(self, call_id: int, actor: str) -> str:
+        call = self.db.get_call(call_id)
+        if not call:
+            raise ActionError("That recording is already gone.")
+        self.db.delete_call(call_id)
+        self.db.audit(actor, "call_removed", call["dispute_id"] or None, {"call_id": call_id})
+        return call["dispute_id"]
 
     # -- human-approved actions -------------------------------------------------------
 

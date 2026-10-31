@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Recordings · DisputeDesk{% endblock %}
+{% block content %}
+<div class="page-head"><div>
+  <h1>Recordings</h1>
+  <div class="sub">Add your call recordings here. The onboarding agent selects the ones that mention an open case, then pulls out what matters and shows if it helps or hurts you.</div>
+</div></div>
+
+{% macro row(c) %}
+<div class="ev">
+  <div class="small" style="flex:1;min-width:0">
+    <b>{{ c.filename or 'Pasted transcript' }}</b> <span class="muted">Call with the {{ c.party }} · {{ c.call_date }} · {{ c.origin }}</span>
+    {% if c.dispute_id %}<div><a href="/disputes/{{ c.dispute_id }}#calls">{{ c.dispute_id }}</a> <span class="muted">selected by {{ c.matched_on }}</span></div>{% endif %}
+    <details style="margin-top:4px"><summary class="muted">Read the transcript</summary><div class="quote" style="white-space:pre-wrap">{{ c.transcript }}</div></details>
+    {% if not c.dispute_id and cases %}
+    <form method="post" action="/recordings/{{ c.id }}/assign" style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+      <select name="dispute_id" aria-label="Choose a case">{% for x in cases %}<option>{{ x }}</option>{% endfor %}</select>
+      <button class="secondary">Add to this case</button>
+    </form>{% endif %}
+  </div>
+  <form method="post" action="/recordings/{{ c.id }}/delete"><button class="secondary">Remove</button></form>
+</div>
+{% endmacro %}
+
+{% if unmatched %}
+<div class="card">
+  <div class="card-head"><h3>Needs a case</h3><span class="badge b-warn">{{ unmatched | length }}</span></div>
+  <div class="small muted">These don't mention one open case's order, tracking number, buyer email or case ID, so the agent won't guess.</div>
+  {% for c in unmatched %}{{ row(c) }}{% endfor %}
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-head"><h3>Selected for a case</h3><span class="small muted">{{ selected | length }}</span></div>
+  {% for c in selected %}{{ row(c) }}{% else %}<div class="small muted">Nothing yet. Put the order number in the file name or say it on the call, like DD-1003-buyer.mp3.</div>{% endfor %}
+</div>
+
+<div class="card" id="add">
+  <h3>Add a recording</h3>
+  {% if stt_on %}
+  <form method="post" action="/recordings/transcribe" enctype="multipart/form-data" class="stack" style="margin-bottom:16px">
+    <label class="small" for="call-audio"><b>Choose a recording</b> <span class="muted">Under 10 MB. Works best in English. Mixed English and Hindi comes out in English. The audio goes to Gnani, and DisputeDesk keeps only the text and a fingerprint. This can take a minute.</span></label>
+    <input id="call-audio" type="file" name="audio" accept="audio/*" required>
+    <button class="secondary">Transcribe for review</button>
+  </form>
+  {% else %}
+  <div class="small muted" style="margin-bottom:12px">Uploading audio is off because no Gnani key is set. You can paste a transcript instead.</div>
+  {% endif %}
+  <form method="post" action="/recordings" class="stack">
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <label class="small">Call with<br><select name="party"><option value="buyer">Buyer</option><option value="carrier">Delivery person or carrier</option></select></label>
+      <label class="small">Date of call<br><input type="date" name="call_date" max="{{ today }}" value="{{ today if draft }}" required></label>
+      {% if draft %}{% for n, pick in ((1, 'Agent'), (2, 'Buyer')) %}
+      <label class="small">Speaker {{ n }} is<br><select name="speaker_{{ n }}">{% for who in ('Agent', 'Seller', 'Buyer', 'Driver', 'Carrier') %}<option{% if who == pick %} selected{% endif %}>{{ who }}</option>{% endfor %}</select></label>
+      {% endfor %}{% endif %}
+    </div>
+    <label class="small" for="call-text"><b>Transcript</b> <span class="muted">Check every word. Start each line with who spoke: Agent, Seller, Buyer, Driver or Carrier{% if draft %}. The menus above fill in Speaker 1 and Speaker 2 when you save{% endif %}.</span></label>
+    <textarea id="call-text" name="transcript" required placeholder="Agent: Thanks for calling about order DD-1003.&#10;Buyer: ...">{{ draft.transcript or '' }}</textarea>
+    <input type="hidden" name="filename" value="{{ draft.filename or '' }}">
+    {% if draft.audio_sha256 %}<input type="hidden" name="audio_sha256" value="{{ draft.audio_sha256 }}">{% endif %}
+    <label class="small" style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" name="consent" value="yes" required style="margin-top:3px"><span>Everyone on this call knew it was being recorded and agreed. Some US states, including California, require this.</span></label>
+    <div><button>Save recording</button></div>
+  </form>
+</div>
+{% endblock %}

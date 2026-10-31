@@ -43,3 +43,8 @@ Status as of 2026-10-30 ~06:00 IST (local Claude Code session). Tick items off a
 
 ## Nice to have (cut first)
 - Photo evidence via vision model; serial-disputer flag; Postgres.
+
+## Call onboarding agent (built, tested live with a made-up call)
+- [ ] Rotate the Gnani key (it was pasted in chat), then decide whether the public demo gets one: visitors could spend its credit.
+- [ ] Try one real phone recording: so far only computer voices are tested.
+- [ ] Live phone line (Twilio or similar): not built.

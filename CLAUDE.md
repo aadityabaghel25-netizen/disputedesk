@@ -56,7 +56,7 @@ If port 8000 is busy: `lsof -ti:8000 | xargs kill`.
 - `app/core.py` deterministic rules: cents, deadlines, allowed actions (from dispute `links`),
   policy lookup (`policy/dispute_rules.md`), injection flags, claim fact-check, fight/settle/review
 - `app/llm.py` OpenAI-compatible client, `ask_json` (pydantic structured output), tool loop, FakeLLM
-- `app/agents.py` the 8-step team (Collector, Triage, Investigator, Rule checker, Drafter, Verifier, Advisor, Settle writer)
+- `app/agents.py` the agent team (Collector, Onboarding for call recordings, Triage, Investigator, Rule checker, Drafter, Verifier, Advisor, Settle writer)
 - `app/service.py` glue: sync, load-by-id, webhooks, Prevent, analyze, approve, evidence pack
 - `app/main.py` Starlette routes + Basic auth; `app/templates/*` server-rendered pages
 - `scripts/` setup + eval; `tests/test_app.py`; `docs/lessons/` teaching notes; `docs/PROMPTS.md` agent prompts

@@ -82,6 +82,34 @@
   </form>
 </div>
 
+{% set review = a.call_review if a and a.call_review else [] %}
+<details class="section" id="calls"{% if review %} open{% endif %}>
+  <summary>What your calls say<span class="hint">{{ calls | length }} recording{{ '' if calls | length == 1 else 's' }} selected</span></summary>
+  <div class="body">
+    {% for c in review %}
+    <div class="ev">
+      <div class="small" style="flex:1">
+        <b>Call with the {{ c.party }}</b> <span class="muted">{{ c.call_date }}{% if c.filename %} · {{ c.filename }}{% endif %}{% if c.matched_on %} · selected by {{ c.matched_on }}{% endif %}</span>
+        {% if c.flagged %}<div style="margin-top:6px"><span class="badge b-bad">Tries to instruct the AI, ignored</span> <span class="muted">Nothing from this call is used.</span></div>{% endif %}
+        {% for f in c.findings %}
+        <div class="quote">“{{ f.quote }}”</div>
+        <div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+          <span class="muted">{{ f.speaker | title }}</span>
+          <span class="badge {{ 'b-ok' if f.stance == 'helps' else 'b-bad' if f.stance == 'hurts' else 'b-gray' }}">{{ 'Helps you' if f.stance == 'helps' else 'May hurt you, left out of your reply' if f.stance == 'hurts' else 'Neutral' }}</span>
+          {% if f.contradicts %}<span class="badge b-warn">May contradict the buyer's claim</span>{% endif %}
+          {% if f.evidence_id %}<span class="cite">{{ f.evidence_id }}</span>{% endif %}
+        </div>
+        {% else %}{% if not c.flagged %}<div class="muted" style="margin-top:4px">Nothing here matters to this dispute.</div>{% endif %}{% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+    {% if a and a.call_next_steps %}<div class="gate" style="margin-top:10px"><div><b>What to do next</b>{% for x in a.call_next_steps %}<div>{{ x }}</div>{% endfor %}</div></div>{% endif %}
+    {% if calls and calls | length != review | length %}<div class="small" style="margin-top:6px">Run the AI team to read the newest recordings.</div>{% endif %}
+    {% if not calls %}<div class="small muted">No recording mentions this case yet.</div>{% endif %}
+    <div class="muted small" style="margin-top:8px">Calls show what someone said. They don't replace the carrier's delivery record, and they don't change the recommendation. <a href="/recordings">Open Recordings</a></div>
+  </div>
+</details>
+
 {% if a %}
 <div class="layout">
   <div>
@@ -108,10 +136,11 @@
 
     <div class="card">
       <div class="card-head"><h3>What your reply will say</h3>
-        <span class="small muted">{{ a.claims_kept | length }} proven{% if a.claims_struck %} · {{ a.claims_struck | length }} struck{% endif %}</span></div>
+        {% set quoted = a.claims_kept | selectattr('call_only') | list | length %}
+        <span class="small muted">{{ a.claims_kept | length - quoted }} proven{% if quoted %} · {{ quoted }} quoted from calls{% endif %}{% if a.claims_struck %} · {{ a.claims_struck | length }} struck{% endif %}</span></div>
       {% for c in a.claims_kept %}
         <div class="claim"><span class="ic">✓</span><div><div class="t">{{ c.text }}</div>
-          <div class="meta">Proof: {% for i in c.evidence_ids %}<span class="cite">{{ i }}</span> {% endfor %}</div></div></div>
+          <div class="meta">{{ 'Quoted from a call, not proof that it happened:' if c.call_only else 'Proof:' }} {% for i in c.evidence_ids %}<span class="cite">{{ i }}</span> {% endfor %}</div></div></div>
       {% endfor %}
       {% for c in a.claims_struck %}
         <div class="claim struck"><span class="ic">✕</span><div><div class="t">{{ c.text }}</div>
@@ -156,7 +185,7 @@
           <span class="id">{{ e.id }}</span>
           <div class="small" style="flex:1">
             <b>{{ e.source }}</b>
-            {% if not e.trusted %}<span class="badge b-warn">written by buyer</span>{% endif %}
+            {% if e.kind == 'call_transcript' %}<span class="badge b-warn">spoken on a call</span>{% elif not e.trusted %}<span class="badge b-warn">written by buyer</span>{% endif %}
             {% if e.content.injection_suspected %}<span class="badge b-bad">manipulation attempt, ignored</span>{% endif %}
             <div>{{ e.summary }}</div>
             {% if e.content.text %}<div class="quote">“{{ e.content.text }}”</div>{% endif %}

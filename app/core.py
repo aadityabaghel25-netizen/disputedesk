@@ -248,7 +248,115 @@ def check_claim(claim: dict, evidence_by_id: dict[str, dict]) -> tuple[bool, str
         normalized = fact.split(".")[0] if re.fullmatch(r"\d+\.00", fact) else fact
         if fact not in cited_facts and normalized not in cited_text:
             return False, f"Mentions '{fact}', which is not in the cited evidence."
+    ok, why = check_call_claim(claim, evidence_by_id)
+    if not ok:
+        return False, why
     return True, "Cited evidence exists and contains every date, amount and ID mentioned."
+
+
+# ---------------------------------------------------------------------------
+# Call transcripts prove what someone said, never that it happened. A driver saying "I delivered it"
+# is not the carrier record PayPal's terms ask for, and speech-to-text can mishear. So a transcript can
+# only be quoted word for word, from the other party, and it never satisfies a PayPal requirement.
+# ---------------------------------------------------------------------------
+
+CALL_KIND = "call_transcript"
+NOT_RECEIVED_REASON, NOT_AS_DESCRIBED_REASON, UNAUTHORISED_REASON = ("MERCHANDISE_OR_SERVICE_NOT_RECEIVED",
+                                                                  "MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED", "UNAUTHORISED")
+SPEAKER_ROLES = {"buyer": "buyer", "customer": "buyer", "carrier": "carrier", "driver": "carrier", "courier": "carrier",
+                 "seller": "staff", "agent": "staff", "staff": "staff", "support": "staff"}
+CALL_ASSERTION = re.compile(r"\b(delivered|delivery|received|arrived|confirm\w*|prov\w*|admit\w*|verif\w*)\b", re.I)
+NEGATIONS = {"not", "never", "no", "without", "didn't", "don't", "doesn't", "wasn't", "isn't", "hasn't", "haven't", "won't", "can't"}
+
+
+def parse_call_turns(transcript: str) -> list[dict]:
+    """Every line must start with who spoke ("Buyer: ..."). Speech-to-text can't reliably tell
+    speakers apart, so the seller labels them, and a quote can be traced to the person who said it."""
+    turns = []
+    for line in transcript.splitlines():
+        if not line.strip():
+            continue
+        label, sep, text = line.partition(":")
+        role = SPEAKER_ROLES.get(label.strip().lower())
+        if not sep or not role or not text.strip():
+            raise ValueError(f"Start each line with who spoke, like \"Buyer: ...\" or \"Agent: ...\". Check: {line.strip()[:60]}")
+        turns.append({"speaker": role, "text": text.strip()})
+    if not turns:
+        raise ValueError("The transcript is empty.")
+    if all(t["speaker"] == "staff" for t in turns):
+        raise ValueError("The transcript needs the other person's words, not only your own team's.")
+    return turns
+
+
+def _quote_in_turn(quote: str, turn_text: str) -> bool:
+    """True if the words are in this turn and aren't flipped by a negation just before them."""
+    turn = f" {_norm_quote(turn_text)} "
+    for m in re.finditer(re.escape(f" {_norm_quote(quote)} "), turn):
+        if not NEGATIONS & set(turn[:m.start()].split()[-4:]):
+            return True
+    return False
+
+
+def check_call_claim(claim: dict, evidence_by_id: dict[str, dict]) -> tuple[bool, str]:
+    cited = [evidence_by_id[i] for i in claim.get("evidence_ids") or []]
+    calls = [e for e in cited if e.get("kind") == CALL_KIND]
+    if not calls:
+        return True, ""
+    if any(e["content"].get("injection_suspected") for e in calls):
+        return False, "Cites a call flagged as trying to manipulate the AI."
+    text = claim.get("text", "")
+    quotes = [q for q in QUOTE_PATTERN.findall(text) if len(q.split()) >= 3]
+    if not quotes:
+        return False, "A call can only be quoted word for word. It shows what was said, not what happened."
+    outside = QUOTE_PATTERN.sub(" ", text).lower()
+    if len(calls) == len(cited) and CALL_ASSERTION.search(outside):
+        return False, "States an event as fact from a call. Only the quote stands, and only as what was said."
+    wanted = "buyer" if re.search(r"\b(buyer|customer)\b", outside) else "carrier" if re.search(r"\b(carrier|driver|courier)\b", outside) else None
+    turns = [t for e in calls for t in e["content"]["turns"] if t["speaker"] != "staff" and (not wanted or t["speaker"] == wanted)]
+    for quote in quotes:
+        if not any(_quote_in_turn(quote, t["text"]) for t in turns):
+            return False, f"\"{quote}\" isn't what {('the ' + wanted) if wanted else 'the other party'} said on the call."
+    return True, ""
+
+
+def call_only(claim: dict, evidence_by_id: dict[str, dict]) -> bool:
+    ids = claim.get("evidence_ids") or []
+    return bool(ids) and all(evidence_by_id.get(i, {}).get("kind") == CALL_KIND for i in ids)
+
+
+def call_quote_ok(quote: str, turn_text: str) -> bool:
+    return len(quote.split()) >= 3 and _quote_in_turn(quote, turn_text)
+
+
+def find_reference(text: str, refs: list[tuple[str, str]]) -> str | None:
+    """Which case reference does this recording mention? Speech-to-text may write DD-1003 as "DD 1003",
+    so separators are optional, but DD-1003 must never match DD-10035: a wrong match attaches a stranger's call."""
+    for label, value in refs:
+        chars = re.sub(r"[^a-z0-9]", "", (value or "").lower())
+        if len(chars) >= 5 and re.search(r"(?<![a-z0-9])" + r"[\s\-_.]*".join(chars) + r"(?![a-z0-9])", text.lower()):
+            return label
+    return None
+
+
+# What a buyer would have to say to undercut their own claim. A flag for the seller: it decides nothing.
+CONTRADICTING_TOPICS = {NOT_RECEIVED_REASON: ("receipt", "delivery"), NOT_AS_DESCRIBED_REASON: ("item_condition",), UNAUTHORISED_REASON: ("purchase",)}
+
+
+def call_contradicts_claim(reason: str, finding: dict) -> bool:
+    return (finding["speaker"] == "buyer" and finding["stance"] == "helps"
+            and finding["topic"] in CONTRADICTING_TOPICS.get(reason, ()))
+
+
+def call_next_steps(missing: list[str], findings: list[dict]) -> list[str]:
+    """What the seller should do next, from what the calls said and what is still missing. Plain rules."""
+    steps = []
+    if any(f["contradicts"] for f in findings):
+        steps.append("Ask the buyer to confirm this in writing in the PayPal case. Their written words carry more weight than a transcript.")
+    if missing and any(f["speaker"] == "carrier" for f in findings):
+        steps.append("A driver's word isn't carrier proof. Ask the carrier for its delivery record, then add it to the case.")
+    if any(f["stance"] == "hurts" for f in findings):
+        steps.append("Read the statements that may hurt your case before you approve. They're left out of your reply, so make sure the reply is still fair and true.")
+    return steps
 
 
 # ---------------------------------------------------------------------------
@@ -473,7 +581,7 @@ def build_supporting_notes(reply_text: str, evidence: list[dict], limit: int = 2
     for e in evidence:
         cited = f"{e['id']}]" in reply_text or f"{e['id']}," in reply_text
         if (e["trusted"] or cited) and not e["content"].get("injection_suspected"):
-            by_buyer = "" if e["trusted"] else " (written by the buyer)"
+            by_buyer = "" if e["trusted"] or e.get("kind") == CALL_KIND else " (written by the buyer)"
             lines.append(f"[{e['id']}] {e['source']}{by_buyer}: {e['summary']}")
     text = "\n".join(lines)
     return text if len(text) <= limit else text[:limit - 1] + "…"

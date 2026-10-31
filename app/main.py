@@ -9,6 +9,7 @@ Routes
   GET  /disputes/{id}           one dispute: evidence, AI draft, struck claims, approve buttons
   POST /disputes/{id}/analyze   run the AI team (in the background)
   POST /disputes/{id}/approve   human-approved action -> PayPal
+  GET  /recordings              call recordings the onboarding agent selects from; POST to add one
   POST /sync                    pull disputes from PayPal now
   POST /disputes/load           add one dispute by its ID
   POST /webhooks/paypal         PayPal calls this when a dispute is created/updated
@@ -67,6 +68,7 @@ ACTIVITY_LABELS = {
     "webhook_rejected": "Unverified webhook blocked", "rules_changed": "Your rules changed", "block_planned": "Work planned", "block_moved": "Work moved before the deadline",
     "download_pack": "Evidence pack opened", "prevent_tracking_added": "Tracking added to PayPal", "prevent_no_tracking": "No tracking number to add",
     "prevent_failed": "Tracking could not be added", "watch_failed": "PayPal check failed",
+    "call_added": "Call recording added", "call_removed": "Call recording removed", "call_transcribed": "Call recording transcribed", "call_selected": "Call recording selected for this case",
 }
 templates.env.globals["activity_label"] = lambda a: ACTIVITY_LABELS.get(a, a.replace("_", " ").capitalize())
 templates.env.globals["reason_label"] = lambda r: REASON_LABELS.get(r, (r or "Other").replace("_", " ").title())
@@ -135,6 +137,7 @@ async def dispute_page(request: Request):
     a = s.db.latest_analysis(dispute_id)
     cents, cur = core.dispute_amount(d)
     return templates.TemplateResponse(request, "dispute.html", {
+        "calls": s.db.list_calls(dispute_id),
         "d": d, "a": a, "evidence": s.db.get_evidence(dispute_id), "amount": f"{core.from_cents(cents)} {cur}",
         "deadline": core.deadline_info(d), "allowed": core.allowed_actions(d), "demo": s.demo,
         "running": dispute_id in s.running, "audit": s.db.audit_log(dispute_id, 20),
@@ -171,6 +174,72 @@ async def approve(request: Request):
             "make_offer": "Offer sent", "accept_claim": "Claim accepted"}.get(action, "Done")
     suffix = " (demo: nothing was sent to PayPal)" if s.demo else " to PayPal"
     return RedirectResponse(f"/disputes/{dispute_id}?msg={done}{suffix}.", 303)
+
+
+def _render_recordings(request: Request, s: Service, draft: dict | None = None):
+    calls = s.db.all_calls()
+    return templates.TemplateResponse(request, "recordings.html", {
+        "unmatched": [c for c in calls if not c["dispute_id"]], "selected": [c for c in calls if c["dispute_id"]],
+        "cases": [d["dispute_id"] for d in s.db.list_disputes() if not core.dispute_outcome(d)], "draft": draft or {},
+        "stt_on": bool(s.settings.gnani_api_key), "today": core.datetime.now(core.timezone.utc).date().isoformat(), "demo": s.demo,
+        "flash": request.query_params.get("msg"), "error": request.query_params.get("err")})
+
+
+async def recordings(request: Request):
+    s = svc(request)
+    if request.method == "GET":
+        return _render_recordings(request, s)
+    try:
+        selected = s.add_call(dict(await request.form()), s.settings.admin_user)
+    except ActionError as e:
+        return RedirectResponse(f"/recordings?err={urllib.parse.quote(str(e))}", 303)
+    if not selected:
+        return RedirectResponse("/recordings?msg=Saved.+It+doesn't+mention+an+open+case,+so+choose+one+below.", 303)
+    return _rerun_agents(s, selected, "/recordings", f"Selected for {selected[0]}.")
+
+
+def _rerun_agents(s: Service, dispute_ids: list[str], back: str, done: str):
+    """The agent team runs itself once a recording joins a case. It only prepares a draft."""
+    allowed = [d for d in dispute_ids if s.allow_ai_run()]
+    note = " The AI team is reading it now." if allowed else " Run the AI team on the case to use it."
+
+    def work():
+        for dispute_id in allowed:
+            s.analyze_quietly(dispute_id)
+    return RedirectResponse(f"{back}?msg={urllib.parse.quote(done + note)}", 303, background=BackgroundTask(work))
+
+
+async def transcribe_recording(request: Request):
+    """Fills the review form. Nothing is evidence until the seller checks it and saves."""
+    s = svc(request)
+    upload = (await request.form()).get("audio")
+    try:
+        if not hasattr(upload, "read"):
+            raise ActionError("Choose an audio file.")
+        audio = await upload.read(s.MAX_AUDIO + 1)
+        text, fingerprint = await run_in_threadpool(s.transcribe_call, audio, upload.filename or "call", s.settings.admin_user)
+    except ActionError as e:
+        return RedirectResponse(f"/recordings?err={urllib.parse.quote(str(e))}", 303)
+    return _render_recordings(request, s, {"transcript": text, "audio_sha256": fingerprint, "filename": upload.filename or ""})
+
+
+async def assign_recording(request: Request):
+    s = svc(request)
+    dispute_id = str((await request.form()).get("dispute_id") or "")
+    try:
+        s.assign_recording(request.path_params["call_id"], dispute_id, s.settings.admin_user)
+    except ActionError as e:
+        return RedirectResponse(f"/recordings?err={urllib.parse.quote(str(e))}", 303)
+    return _rerun_agents(s, [dispute_id], "/recordings", f"Added to {dispute_id}.")
+
+
+async def remove_recording(request: Request):
+    s = svc(request)
+    try:
+        dispute_id = s.remove_call(request.path_params["call_id"], s.settings.admin_user)
+    except ActionError as e:
+        return RedirectResponse(f"/recordings?err={urllib.parse.quote(str(e))}", 303)
+    return _rerun_agents(s, [dispute_id] if dispute_id else [], "/recordings", "Recording removed.")
 
 
 async def sync(request: Request):
@@ -223,7 +292,8 @@ async def pack(request: Request):
                   f"Reason: {data['dispute'].get('reason')}", f"Status: {data['dispute'].get('status')}", "",
                   "SELLER RESPONSE", a["reply_text"], "", "EVIDENCE"]
         for e in data["evidence"]:
-            lines.append(f"[{e['id']}] {e['source']}{' (written by buyer)' if not e['trusted'] else ''}: {e['summary']}")
+            by_buyer = not e["trusted"] and e["kind"] != core.CALL_KIND
+            lines.append(f"[{e['id']}] {e['source']}{' (written by buyer)' if by_buyer else ''}: {e['summary']}")
         headers = {"Content-Disposition": f'attachment; filename="{dispute_id}-evidence.txt"'}
         return PlainTextResponse("\n".join(lines), headers=headers)
     return templates.TemplateResponse(request, "pack.html", data)
@@ -450,6 +520,10 @@ def create_app(service: Service | None = None) -> Starlette:
         Route("/disputes/{dispute_id}/analyze", analyze, methods=["POST"]),
         Route("/disputes/{dispute_id}/approve", approve, methods=["POST"]),
         Route("/disputes/{dispute_id}/pack", pack),
+        Route("/recordings", recordings, methods=["GET", "POST"]),
+        Route("/recordings/transcribe", transcribe_recording, methods=["POST"]),
+        Route("/recordings/{call_id:int}/assign", assign_recording, methods=["POST"]),
+        Route("/recordings/{call_id:int}/delete", remove_recording, methods=["POST"]),
         Route("/sync", sync, methods=["POST"]),
         Route("/disputes/load", load, methods=["POST"]),
         Route("/webhooks/paypal", webhook, methods=["POST"]),

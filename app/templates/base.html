@@ -177,6 +177,8 @@
   <nav class="main" aria-label="Main">
     <a href="/" class="{{ 'on' if path == '/' or path.startswith('/disputes') }}"{% if path == '/' or path.startswith('/disputes') %} aria-current="page"{% endif %}>
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h18M3 12h18M3 17h12"/></svg>Disputes{% if attention %}<span class="count" title="{{ attention }} waiting for your approval">{{ attention }}</span>{% endif %}</a>
+    <a href="/recordings" class="{{ 'on' if path == '/recordings' }}">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>Recordings</a>
     <a href="/board" class="{{ 'on' if path == '/board' }}">
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>Deadlines</a>
     <a href="/insights" class="{{ 'on' if path == '/insights' }}">

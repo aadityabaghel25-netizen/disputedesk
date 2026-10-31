@@ -132,7 +132,9 @@ Fallback if evidence submission fails in sandbox: use `send-message` + `make-off
 
 ## 10. Status (update every session)
 
-- **Last updated:** 2026-10-30 ~06:00 IST (first local Claude Code session)
+- **Last updated:** 2026-10-31. Onboarding agent for call recordings built and tested on the real model with made-up calls. Gnani batch speech-to-text tested live with a made-up two-voice call: key is in local `.env`, not yet on Render. Gnani's firewall needs a User-Agent header; files list is under `data`. Not committed yet.
+- **Don't run `scripts/eval.py --fake` casually:** it overwrites the real-model `docs/eval_results.md`. Restore with git if it happens.
+- **Oct 30:** first local Claude Code session.
 - **Oct 30 local session:** real AI connected. Key is **Nebius** (Token Factory, OpenAI-compatible), model
   `nvidia/nemotron-3-super-120b-a12b` (reasoning model: hidden thinking tokens count toward max_tokens, so default
   raised 1200 -> 4000). Tool calling works. Real-model eval: 20/20, 0 unproven claims, 4/4 injections, ~20 s/case.
@@ -203,7 +205,7 @@ Fallback if evidence submission fails in sandbox: use `send-message` + `make-off
 | 2026-10-24 | Chose DisputeDesk over GigShield / MilestoneLock / Haggle (least crowded, deepest PayPal use, banking-domain fit, no Payouts dependency) |
 | 2026-10-25 | Merged best features of winners into DisputeDesk (Prevent / Defend / Settle) |
 | 2026-10-25 | Python, not TypeScript (Ankit's comfort); REST for gaps in Python toolkit |
-| 2026-10-31 | No voice features for the hackathon: focus on deploy and submission; voice approval would also break the human-click rule |
+| 2026-10-31 | Onboarding agent added for call recordings (Gnani batch speech-to-text). Code selects a recording only when it mentions one open case; AI picks quotes and says helps/hurts; code keeps exact quotes from the other person only. A call shows what was said: consent required, seller reviews it, it never meets a PayPal requirement and doesn't change fight/settle. No voice approval or live phone line |
 | 2026-10-25 | AI provider kept swappable; start on NVIDIA Nemotron free key |
 | 2026-10-25 | **Not entering the Nebius x NVIDIA hackathon**. PayPal only |
 | 2026-10-29 | Starlette instead of FastAPI, SQLite instead of Postgres (simpler, testable offline); offline demo mode + FakeLLM as never-fail fallback |

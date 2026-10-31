@@ -66,6 +66,10 @@ class Settings:
     ai_runs_per_hour: int = 30
     agent_turns_per_hour: int = 200   # dashboard agent; one question can take several turns
     agent_model: str = ""             # dashboard agent's model; empty = agent switched off
+    # Speech-to-text for call recordings, using Gnani. No key = paste transcripts only.
+    gnani_api_key: str = ""
+    gnani_model: str = "prisma-v3.0"
+    gnani_language: str = "en-IN"
 
 
 def get_settings() -> Settings:
@@ -93,4 +97,7 @@ def get_settings() -> Settings:
         ai_runs_per_hour=int(e("AI_RUNS_PER_HOUR", "30")),
         agent_turns_per_hour=int(e("AGENT_TURNS_PER_HOUR", "200")),
         agent_model=e("AGENT_MODEL", ""),
+        gnani_api_key=e("GNANI_API_KEY", ""),
+        gnani_model=e("GNANI_MODEL", "prisma-v3.0"),
+        gnani_language=e("GNANI_LANGUAGE", "en-IN"),
     )

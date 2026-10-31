@@ -193,6 +193,25 @@ def gather(pp, store: Store, dispute: dict) -> tuple[list[dict], dict, list[str]
     return items, ctx, warnings
 
 
+CALL_TOPICS = {"receipt": "whether the order arrived", "delivery": "how the order was delivered",
+               "item_condition": "the condition of the item", "purchase": "whether they made the purchase", "other": "the order"}
+
+
+def add_call_finding(items: list[dict], call: dict, turn: dict, quote: str, topic: str, stance: str) -> str:
+    """One quote from one recording becomes one evidence item. The summary is written by code, and no requirement
+    below ever accepts this kind, so a call can never stand in for a carrier record."""
+    evidence_id = f"E{len(items) + 1}"
+    items.append({"id": evidence_id, "kind": core.CALL_KIND, "trusted": False,
+                  "source": f"Call with the {call['party']} ({call['origin']})",
+                  "summary": f"On a call with the {call['party']} on {call['call_date']}, the {turn['speaker']} spoke about "
+                             f"{CALL_TOPICS[topic]}. Transcript reviewed by the seller, who confirmed everyone agreed to recording. "
+                             "Spoken words, not carrier or PayPal records.",
+                  "content": {"call_date": call["call_date"], "party": call["party"], "turns": [turn], "text": quote,
+                              "topic": topic, "stance": stance, "injection_suspected": False,
+                              "audio_sha256": call.get("audio_sha256")}})
+    return evidence_id
+
+
 # ---------------------------------------------------------------------------
 # What PayPal expects for each reason, checked by code against our evidence
 # ---------------------------------------------------------------------------

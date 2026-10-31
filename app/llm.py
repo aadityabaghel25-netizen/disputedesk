@@ -18,6 +18,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+import uuid
 
 from pydantic import BaseModel, ValidationError
 
@@ -60,6 +61,86 @@ class OpenAICompatibleLLM:
                     continue
                 raise LLMError(f"Could not reach the LLM: {e}") from None
         raise LLMError("LLM retries exhausted")
+
+
+GNANI_JOBS = "https://api.vachana.ai/stt/v3/batch/jobs"
+
+
+def _gnani_json(url: str, api_key: str | None, body: bytes | None = None, content_type: str | None = None) -> dict | list:
+    headers = {"User-Agent": "DisputeDesk/1.0"}   # Gnani's firewall refuses Python's default name (error 1010)
+    if api_key:   # the transcript link is presigned: it gets no key
+        headers["X-API-Key-ID"] = api_key
+    if content_type:
+        headers["Content-Type"] = content_type
+    req = urllib.request.Request(url, data=body, method="POST" if body is not None else "GET", headers=headers)
+    for wait in (5, 10, 20, 30, None):   # Gnani sends 429 with no Retry-After when an account is busy
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            if e.code != 429 or wait is None:
+                raise LLMError(f"Gnani said no (HTTP {e.code}).") from None
+            time.sleep(wait)
+        except (urllib.error.URLError, TimeoutError, ValueError) as e:
+            raise LLMError(f"Could not reach Gnani: {e}") from None
+    raise LLMError("Gnani is busy. Try again in a minute.")
+
+
+def _speaker_lines(result: dict) -> str:
+    """Join Gnani's segments into "Speaker 1: ..." lines. The seller replaces those with who really spoke."""
+    speakers, lines = {}, []
+    for seg in result.get("segments") or []:
+        text = (seg.get("text") or "").strip()
+        if not text or seg.get("speaker_id") is None:
+            continue
+        label = f"Speaker {speakers.setdefault(seg['speaker_id'], len(speakers) + 1)}"
+        if lines and lines[-1][0] == label:
+            lines[-1][1] += " " + text
+        else:
+            lines.append([label, text])
+    return "\n".join(f"{who}: {text}" for who, text in lines) or (result.get("full_transcript") or "").strip()
+
+
+GNANI_TOPIC = "A phone call between an online shop, its customer or a delivery driver about an order, its delivery and a PayPal dispute."
+
+
+def gnani_transcribe(api_key: str, model: str, language: str, audio: bytes, filename: str, keyterms: list[str] | None = None,
+                     poll_seconds: int = 10, max_polls: int = 30) -> str:
+    """Speech-to-text with Gnani's batch API: create a job, start it, poll, then fetch the transcript.
+    Its instant endpoint stops at 30 seconds and can't separate speakers, so it doesn't suit phone calls.
+    The seller reviews the result before it is saved, because speech models can mishear or invent words."""
+    boundary = uuid.uuid4().hex
+    # Phone audio is noisy, and order numbers are easy to mishear: key terms tell the model what to listen for.
+    config = {"model": model, "language_code": language, "mode": "transcribe", "with_diarization": True, "num_speakers": 2,
+              "with_denoise": True, "topic": GNANI_TOPIC}
+    if keyterms:
+        config["keyterms"] = keyterms[:200]
+    config = json.dumps(config)
+    safe_name = re.sub(r"[^\w.-]", "_", filename)[:80] or "call.mp3"
+    body = (f'--{boundary}\r\nContent-Disposition: form-data; name="config"\r\nContent-Type: application/json\r\n\r\n{config}\r\n'
+            f'--{boundary}\r\nContent-Disposition: form-data; name="files"; filename="{safe_name}"\r\n'
+            "Content-Type: application/octet-stream\r\n\r\n").encode() + audio + f"\r\n--{boundary}--\r\n".encode()
+    job = _gnani_json(GNANI_JOBS, api_key, body, f"multipart/form-data; boundary={boundary}").get("job_id")
+    if not job:
+        raise LLMError("Gnani didn't return a job id.")
+    _gnani_json(f"{GNANI_JOBS}/{job}/start", api_key, b"")
+    for _ in range(max_polls):
+        status = _gnani_json(f"{GNANI_JOBS}/{job}", api_key).get("status")
+        if status == "COMPLETED":
+            break
+        if status in ("FAILED", "PARTIAL_FAILURE", "START_FAILED", "CANCELLED"):
+            raise LLMError(f"Gnani couldn't transcribe this call ({status}).")
+        time.sleep(poll_seconds)
+    else:
+        raise LLMError("Gnani is taking too long. Try again, or paste the transcript.")
+    files = _gnani_json(f"{GNANI_JOBS}/{job}/files?status=COMPLETED", api_key)
+    url = ((files.get("data") or [{}])[0]).get("transcript_url") or ""
+    if not url.startswith("https://"):
+        raise LLMError("Gnani didn't return a transcript link.")
+    text = _speaker_lines(_gnani_json(url, None))
+    if not text:
+        raise LLMError("Gnani heard no speech in this recording.")
+    return text
 
 
 def extract_json(text: str) -> dict:
@@ -143,6 +224,8 @@ class FakeLLM:
         if "[agent:triage]" in system:
             return self._json({"summary": "The buyer says there is a problem with the order and asks for their money back.",
                                "buyer_claim": "Problem with the order."})
+        if "[agent:onboarding]" in system:
+            return self._json(self._onboard(user))
         if "[agent:drafter]" in system:
             return self._json(self._draft(user))
         if "[agent:judge]" in system:
@@ -156,6 +239,19 @@ class FakeLLM:
     @staticmethod
     def _json(obj) -> dict:
         return {"role": "assistant", "content": json.dumps(obj)}
+
+    @staticmethod
+    def _onboard(user: str) -> dict:
+        turns = json.loads(user.split("CALL_JSON:", 1)[1].split("END_CALL", 1)[0])
+        for t in reversed(turns):   # the last thing they said, not the "yes" to being recorded
+            if t["speaker"] == "staff" or len(t["text"].split()) < 3:
+                continue
+            words = t["text"].lower()
+            hurts = bool(re.search(r"\b(never|not|no)\b", words))
+            topic = "delivery" if t["speaker"] == "carrier" else "receipt" if re.search(r"came|come|arrived|received|got", words) else "other"
+            stance = "hurts" if hurts else "helps" if topic != "other" else "neutral"
+            return {"findings": [{"turn": t["turn"], "quote": t["text"], "topic": topic, "stance": stance}]}
+        return {"findings": []}
 
     @staticmethod
     def _draft(user: str) -> dict:
@@ -185,6 +281,13 @@ class FakeLLM:
             if e["kind"] == "chat" and "arrived" in e["content"].get("text", "").lower():
                 claims.append({"text": f"On {e['content']['date']} the buyer wrote: \"{e['content']['text']}\"",
                                "evidence_ids": [e["id"]]})
+        for e in evidence:  # calls can only be quoted; the over-reach below shows the verifier striking it
+            if e["kind"] != "call_transcript" or e["content"]["stance"] != "helps":
+                continue
+            c, speaker = e["content"], e["content"]["turns"][0]["speaker"]
+            claims.append({"text": f"In a call on {c['call_date']}, the {speaker} said: \"{c['text']}\"", "evidence_ids": [e["id"]]})
+            if speaker == "carrier":
+                claims.append({"text": "The carrier confirmed on the phone that the parcel was delivered.", "evidence_ids": [e["id"]]})
         return {"opening": "Thank you for reviewing this case. Here are the facts, each with supporting evidence.",
                 "claims": claims,
                 "closing": "Based on this evidence, we respectfully ask PayPal to resolve the case in the seller's favour."}

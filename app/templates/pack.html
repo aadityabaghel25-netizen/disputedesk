@@ -29,7 +29,7 @@
   <table>
     <tr><th>ID</th><th>Source</th><th>Fact</th></tr>
     {% for e in evidence %}
-    <tr><td class="mono">{{ e.id }}</td><td>{{ e.source }}{% if not e.trusted %}<div class="tag">written by buyer</div>{% endif %}</td>
+    <tr><td class="mono">{{ e.id }}</td><td>{{ e.source }}{% if e.kind == 'call_transcript' %}<div class="tag">spoken on a call</div>{% elif not e.trusted %}<div class="tag">written by buyer</div>{% endif %}</td>
         <td>{{ e.summary }}{% if e.content.text %}<div class="muted">“{{ e.content.text }}”</div>{% endif %}</td></tr>
     {% endfor %}
   </table>
