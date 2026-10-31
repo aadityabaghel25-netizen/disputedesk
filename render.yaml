@@ -1,5 +1,7 @@
 # Render "Blueprint": tells Render how to run DisputeDesk.
 # In Render: New + -> Blueprint -> pick your GitHub repo. Then fill in the secret values.
+# With no PayPal keys it runs in demo mode: sample disputes, nothing sent to PayPal. That's the safe public setup.
+# To connect the real sandbox, add PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET and ADMIN_PASSWORD in Render's Environment tab.
 services:
   - type: web
     name: disputedesk
@@ -17,12 +19,6 @@ services:
         value: /var/data/disputedesk.db
       - key: PYTHON_VERSION
         value: "3.12.7"
-      - key: PAYPAL_CLIENT_ID
-        sync: false
-      - key: PAYPAL_CLIENT_SECRET
-        sync: false
-      - key: PAYPAL_WEBHOOK_ID
-        sync: false
       - key: LLM_BASE_URL
         value: https://api.tokenfactory.nebius.com/v1
       - key: LLM_API_KEY
@@ -35,5 +31,3 @@ services:
         value: "30"
       - key: ADMIN_USER
         value: seller
-      - key: ADMIN_PASSWORD
-        sync: false
