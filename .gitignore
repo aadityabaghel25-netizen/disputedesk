@@ -1,0 +1,28 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Local test output (may contain sandbox data)
+spike/results/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Local database (sandbox disputes, AI output) and local tool settings
+data/*.db
+data/*.db-*
+.claude/
+
+# Private research (competitors, strategy)
+research_notes/
+reports/
+
+# Private planning notes
+docs/research/

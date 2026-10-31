@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Activity · DisputeDesk{% endblock %}
+{% block content %}
+<div class="page-head"><div>
+  <h1>Activity</h1>
+  <div class="sub">Everything that happened, by you, the AI team and PayPal. Each entry is chained to the one before it, so history can't be changed unnoticed.</div>
+</div>
+{% if ok %}<span class="badge b-ok" style="font-size:13px;padding:6px 12px">✓ Hash chain intact</span>
+{% else %}<span class="badge b-bad" style="font-size:13px;padding:6px 12px">Chain broken at entry {{ bad }}: the log was changed</span>{% endif %}
+</div>
+<div class="card" style="padding:8px 12px">
+  {% if not rows %}<p class="muted" style="padding:20px 8px;margin:0;text-align:center">Nothing has happened yet.</p>{% else %}
+  <div class="table-wrap"><table>
+    <tr><th>When (UTC)</th><th>What</th><th>Who</th><th>Dispute</th><th>Details</th></tr>
+    {% for r in rows %}
+    <tr class="small">
+      <td class="muted" style="white-space:nowrap">{{ r.ts[:16].replace('T',' ') }}</td>
+      <td style="font-weight:600">{{ activity_label(r.action) }}</td>
+      <td>{{ 'AI' if r.actor == 'ai' else 'PayPal' if r.actor == 'paypal' else r.actor | capitalize }}</td>
+      <td>{% if r.dispute_id %}<a class="mono" href="/disputes/{{ r.dispute_id }}">{{ r.dispute_id }}</a>{% endif %}</td>
+      <td><details><summary class="muted">View</summary><div class="mono" style="max-width:420px;word-break:break-word;margin-top:4px">{{ r.details | tojson }}</div><div class="mono muted" style="margin-top:4px">#{{ r.id }} · {{ r.hash[:16] }}…</div></details></td>
+    </tr>
+    {% endfor %}
+  </table></div>{% endif %}
+</div>
+{% endblock %}

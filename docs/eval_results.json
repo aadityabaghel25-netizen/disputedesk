@@ -1,0 +1,11 @@
+{
+ "model": "nvidia/nemotron-3-super-120b-a12b",
+ "run": "2026-10-30",
+ "cases": 20,
+ "correct": 20,
+ "unproven": 0,
+ "claims": 59,
+ "struck": 0,
+ "seconds": 18.7,
+ "fallbacks": 0
+}

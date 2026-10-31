@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Rules · DisputeDesk{% endblock %}
+{% block content %}
+<div class="page-head"><div>
+  <h1>Your rules</h1>
+  <div class="sub">Plain code enforces these limits, not the AI. The AI can't change them, and every change is logged.</div>
+</div></div>
+
+<div class="card">
+  <form method="post" action="/rules" style="display:grid;gap:16px;max-width:460px">
+    <label>
+      <b>Suggest a settlement for disputes up to</b>
+      <div style="display:flex;align-items:center;gap:8px;margin:6px 0 4px"><span class="muted">$</span><input type="text" name="settle_max_usd" value="{{ settle_max_usd }}" inputmode="decimal" style="max-width:140px"></div>
+      <span class="muted small">Above this, DisputeDesk recommends fighting or a manual review.</span>
+    </label>
+    <label>
+      <b>Never offer more than this share of the disputed amount</b>
+      <div style="display:flex;align-items:center;gap:8px;margin:6px 0 4px"><input type="text" name="max_offer_pct" value="{{ max_offer_pct }}" inputmode="numeric" style="max-width:140px"><span class="muted">%</span></div>
+      <span class="muted small">Offers above this are blocked, even if you type a bigger number.</span>
+    </label>
+    <div><button>Save rules</button></div>
+  </form>
+</div>
+
+<div class="card small">
+  <h3>Always on</h3>
+  <ul>
+    <li>Nothing is sent to PayPal until you click a button.</li>
+    <li>Accepting a claim needs you to type ACCEPT.</li>
+    <li>Buyers who dispute most of their orders never get a settlement suggestion.</li>
+    <li>Text written by the buyer is treated as data, never as instructions to the AI.</li>
+  </ul>
+</div>
+{% endblock %}

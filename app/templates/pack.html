@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Evidence pack {{ dispute.dispute_id }}</title>
+<style>
+  :root { --text:#16191d; --muted:#5b6470; --line:#d9dde2; --bg:#ffffff; --warn:#8a5a00; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 Georgia, "Times New Roman", serif; }
+  main { max-width:760px; margin:0 auto; padding:24px 16px; }
+  h1 { font-size:22px; margin:0 0 4px; } h2 { font-size:16px; margin:24px 0 8px; border-bottom:1px solid var(--line); padding-bottom:4px; }
+  .muted { color:var(--muted); } .mono { font-family: ui-monospace, Menlo, monospace; font-size:12px; }
+  table { width:100%; border-collapse:collapse; } td, th { text-align:left; padding:6px 4px; border-bottom:1px solid var(--line); vertical-align:top; }
+  pre { white-space:pre-wrap; font:inherit; background:#f6f7f9; padding:12px; border-radius:6px; }
+  .tag { color:var(--warn); font-size:12px; }
+  .print { font:14px system-ui; padding:8px 14px; border-radius:8px; border:1px solid var(--line); background:#fff; cursor:pointer; }
+  @media print { .print { display:none; } main { padding:0; } }
+</style>
+</head>
+<body><main>
+  <button class="print" onclick="window.print()">Print / Save as PDF</button>
+  <h1>Dispute evidence pack</h1>
+  <div class="muted mono">{{ dispute.dispute_id }} · {{ dispute.reason }} · {{ amount }} · status {{ dispute.status }}</div>
+  {% if deadline.due %}<div class="muted">Reply by {{ deadline.due[:16].replace('T',' ') }} UTC</div>{% endif %}
+
+  <h2>Seller response</h2>
+  <pre>{{ analysis.reply_text }}</pre>
+
+  <h2>Evidence</h2>
+  <table>
+    <tr><th>ID</th><th>Source</th><th>Fact</th></tr>
+    {% for e in evidence %}
+    <tr><td class="mono">{{ e.id }}</td><td>{{ e.source }}{% if not e.trusted %}<div class="tag">written by buyer</div>{% endif %}</td>
+        <td>{{ e.summary }}{% if e.content.text %}<div class="muted">“{{ e.content.text }}”</div>{% endif %}</td></tr>
+    {% endfor %}
+  </table>
+
+  <h2>What PayPal expects for this reason</h2>
+  <ul>{% for x in analysis.advice.required_met %}<li>✔ {{ x }}</li>{% endfor %}
+      {% for x in analysis.advice.required_missing %}<li>✘ {{ x }}</li>{% endfor %}</ul>
+
+  <p class="muted small">Prepared by DisputeDesk on {{ analysis.created_at }}. Every statement above cites evidence that was checked by code
+  and an AI fact-checker. Audit log integrity: {{ 'intact' if audit_ok else 'BROKEN' }}.</p>
+
+  <h2>Evidence integrity</h2>
+  {% if date_problems %}<p class="tag"><b>Check before filing:</b> {{ date_problems | join(' ') }}</p>
+  {% else %}<p class="muted">No impossible shipping or delivery dates found.</p>{% endif %}
+  <p class="muted">SHA-256 fingerprints of each item as recorded. If an item changes, its fingerprint changes.</p>
+  <table>
+    <tr><th>ID</th><th>Source</th><th>Fingerprint</th></tr>
+    {% for r in manifest["items"] %}<tr><td class="mono">{{ r.id }}</td><td>{{ r.source }}</td><td class="mono">{{ r.sha256[:16] }}…</td></tr>{% endfor %}
+  </table>
+  <p class="mono">Whole pack: {{ manifest.bundle }}</p>
+</main></body>
+</html>

@@ -1,0 +1,283 @@
+{% extends "base.html" %}
+{% block title %}{{ d.dispute_id }} · DisputeDesk{% endblock %}
+{% block head %}
+{% if running %}<meta http-equiv="refresh" content="4">{% endif %}
+<style>
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 18px; align-items: start; }
+  .decision { position: sticky; top: 16px; }
+  @media (max-width: 1080px) { .layout { grid-template-columns: 1fr; } .decision { position: static; } .layout > aside { order: -1; } }
+  .progress { display: flex; gap: 0; margin: 16px 0 2px; list-style: none; padding: 0; }
+  .progress li { flex: 1; position: relative; font-size: 12.5px; color: var(--muted); padding-top: 20px; min-width: 0; }
+  .progress li::before { content: ""; position: absolute; top: 5px; left: 0; right: 0; height: 2px; background: var(--line); }
+  .progress li::after { content: ""; position: absolute; top: 0; left: 0; width: 12px; height: 12px; border-radius: 50%; background: var(--card); border: 2px solid var(--line); }
+  .progress li.done::before, .progress li.done::after { background: var(--ok); border-color: var(--ok); }
+  .progress li.now { color: var(--text); font-weight: 600; }
+  .progress li.now::after { border-color: var(--brand); background: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
+  .progress li:last-child::before { display: none; }
+  .hero { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .hero h1 { margin: 0; font-size: 24px; font-weight: 800; }
+  .amount { font-size: 26px; font-weight: 800; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .verdict { border-radius: var(--radius); padding: 18px 20px; margin-bottom: 16px; border: 1px solid; }
+  .verdict.fight { background: var(--ok-bg); border-color: color-mix(in srgb, var(--ok) 30%, transparent); }
+  .verdict.settle { background: var(--warn-bg); border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
+  .verdict.review { background: var(--bad-bg); border-color: color-mix(in srgb, var(--bad) 30%, transparent); }
+  .verdict .lbl { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+  .verdict .big { font-size: 30px; font-weight: 800; letter-spacing: -.02em; margin: 2px 0 6px; }
+  .verdict.fight .big { color: var(--ok); } .verdict.settle .big { color: var(--warn); } .verdict.review .big { color: var(--bad); }
+  .checks { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px; margin-top: 12px; font-size: 13px; }
+  @media (max-width: 700px) { .checks { grid-template-columns: 1fr; } }
+  .checks ul { margin: 4px 0 0; padding-left: 0; list-style: none; }
+  .checks li { margin: 3px 0; }
+  .timeline { list-style: none; margin: 0; padding: 0; }
+  .timeline li { position: relative; padding: 0 0 14px 34px; }
+  .timeline li::before { content: ""; position: absolute; left: 11px; top: 24px; bottom: 0; width: 2px; background: var(--line); }
+  .timeline li:last-child::before { display: none; }
+  .timeline .n { position: absolute; left: 0; top: 0; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
+                 font-size: 11.5px; font-weight: 700; background: var(--card); border: 2px solid var(--line); }
+  .timeline .who { font-weight: 700; }
+  .deadline-big { font-size: 34px; font-weight: 800; letter-spacing: -.02em; line-height: 1.1; }
+  .gate { display: flex; gap: 10px; align-items: flex-start; font-size: 12.5px; padding: 10px 12px; border-radius: 10px; background: var(--brand-soft); color: var(--text); margin-bottom: 12px; }
+  .msg-buyer { padding: 12px 14px; border-radius: 12px; background: var(--line-2); margin-top: 14px; font-size: 14px; }
+  .msg-buyer.flagged { background: var(--bad-bg); border: 1px dashed color-mix(in srgb, var(--bad) 45%, transparent); }
+</style>
+{% endblock %}
+{% block content %}
+<a class="crumb" href="/">← All disputes</a>
+{% set stage = 'decided' if outcome else 'filed' if submissions else 'approve' if a else 'build' %}
+{% set dec = a.advice.decision if a else None %}
+
+<div class="card">
+  <div class="hero">
+    <div>
+      <h1>{{ reason_label(d.reason) }}</h1>
+      <div class="muted small mono" style="margin-top:2px">{{ d.dispute_id }}</div>
+    </div>
+    <div style="display:flex;gap:26px;flex-wrap:wrap;text-align:right">
+      {% set u = deadline.urgency %}
+      {% if deadline.due and not outcome %}<div><div class="muted small">{{ 'Reply within' if u != 'overdue' else 'Reply' }}</div>
+        <div class="amount" style="color:{{ 'var(--bad)' if u in ('overdue','critical') else 'var(--warn)' if u == 'soon' else 'var(--ok)' }}">{% if u == 'overdue' %}Overdue{% else %}{{ (deadline.hours_left / 24) | round(1) }} days{% endif %}</div>
+        <div class="muted" style="font-size:11.5px">by {{ deadline.due[:16].replace('T', ' ') }} UTC{% if deadline.estimated %} · estimated, PayPal sent no date{% endif %}</div></div>{% endif %}
+      <div><div class="muted small">Disputed</div><div class="amount">{{ amount }}</div></div>
+    </div>
+  </div>
+  <ol class="progress" aria-label="Case progress">
+    <li class="{{ 'now' if stage == 'build' else 'done' }}">AI builds the case</li>
+    <li class="{{ 'now' if stage == 'approve' else 'done' if stage in ('filed','decided') }}">You approve</li>
+    <li class="{{ 'now' if stage == 'filed' else 'done' if stage == 'decided' }}">PayPal reviews</li>
+    <li class="{{ 'done' if stage == 'decided' }}">{% if outcome == 'won' %}You won{% elif outcome == 'lost' %}Buyer won{% else %}Decision{% endif %}</li>
+  </ol>
+  {% for m in statements %}
+    {% set flagged = m.posted_by == 'BUYER' and (injection_flags(m.content or '') or (a and a.triage.manipulation_attempt)) %}
+    <div class="msg-buyer {{ 'flagged' if flagged }}">
+      <div class="small muted" style="margin-bottom:3px"><b>{{ m.posted_by | title }}</b> wrote{% if m.time_posted %} on {{ m.time_posted[:10] }}{% endif %}
+        {% if flagged %}<span class="badge b-bad" style="margin-left:6px">Tries to instruct the AI, ignored</span>{% endif %}</div>
+      “{{ m.content }}”
+    </div>
+  {% endfor %}
+  <form method="post" action="/disputes/{{ d.dispute_id }}/analyze" style="margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    <button {% if running %}disabled{% endif %}{% if a %} class="secondary"{% endif %}>
+      {% if running %}AI team working…{% elif a %}↻ Run the AI team again{% else %}Run the AI team{% endif %}</button>
+    {% if running %}<span class="muted small">Building your case. This page updates by itself.</span>
+    {% elif not a %}<span class="muted small">It gathers the evidence and drafts a reply. Nothing is sent to PayPal.</span>{% endif %}
+  </form>
+</div>
+
+{% if a %}
+<div class="layout">
+  <div>
+    {% set rc = a.advice.receipt or {} %}
+    <div class="verdict {{ dec }}">
+      <div class="lbl">Recommendation</div>
+      <div class="big">{{ dec | upper }}</div>
+      <div>{{ a.advice.why }}</div>
+      <div class="muted small" style="margin-top:4px">{{ a.triage.summary }}</div>
+      {% if a.buyer_risk and a.buyer_risk.level != 'low' %}
+        <div style="margin-top:8px"><span class="badge {{ 'b-bad' if a.buyer_risk.level == 'high' else 'b-warn' }}">{{ 'Serial disputer' if a.buyer_risk.level == 'high' else 'Buyer has disputed before' }}</span>
+          <span class="small">{{ a.buyer_risk.why }}</span></div>
+      {% endif %}
+      {% for w in a.warnings %}{% if 'instructions to an AI' not in w %}<div class="small" style="margin-top:8px;color:var(--warn)">⚠ {{ w }}</div>{% endif %}{% endfor %}
+      <div class="checks">
+        <div><b>What PayPal expects</b><ul>{% for x in a.advice.required_met %}<li>✅ {{ x }}</li>{% else %}<li class="muted">Nothing found yet</li>{% endfor %}</ul></div>
+        <div><b>Missing</b><ul>{% for x in a.advice.required_missing %}<li>❌ {{ x }}</li>{% else %}<li class="muted">Nothing missing</li>{% endfor %}</ul></div>
+      </div>
+      <details class="small" style="margin-top:10px"><summary><b>Decision receipt</b> <span class="muted">(decided by code, not AI)</span></summary>
+        <div style="margin-top:6px">Rule matched: <b>{{ rc.rule }}</b></div>
+        <div class="muted">Facts: {{ rc.verified_claims }} verified claims · {{ rc.expected_found }} expected items found, {{ rc.expected_missing }} missing · {{ rc.disputed }} {{ rc.currency }} disputed · settlement limit {{ rc.settle_limit }} · max offer {{ rc.max_offer_pct }}% · buyer risk {{ rc.buyer_risk }} · PayPal allows offers: {{ 'yes' if rc.paypal_allows_offer else 'no' }}</div>
+      </details>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>What your reply will say</h3>
+        <span class="small muted">{{ a.claims_kept | length }} proven{% if a.claims_struck %} · {{ a.claims_struck | length }} struck{% endif %}</span></div>
+      {% for c in a.claims_kept %}
+        <div class="claim"><span class="ic">✓</span><div><div class="t">{{ c.text }}</div>
+          <div class="meta">Proof: {% for i in c.evidence_ids %}<span class="cite">{{ i }}</span> {% endfor %}</div></div></div>
+      {% endfor %}
+      {% for c in a.claims_struck %}
+        <div class="claim struck"><span class="ic">✕</span><div><div class="t">{{ c.text }}</div>
+          <div class="meta" style="color:var(--bad)">Removed by {{ c.checked_by }}: {{ c.why }}</div></div></div>
+      {% endfor %}
+      {% if not a.claims_kept and not a.claims_struck %}<p class="muted">No claims could be proven.</p>{% endif %}
+    </div>
+
+    {% if a.protection %}
+    <div class="grid">
+      <div class="card">
+        {% set v = a.protection.verdict %}
+        <div class="card-head"><h3>Seller Protection check</h3>
+          <span class="badge {{ 'b-ok' if v == 'may_qualify' else 'b-bad' if v == 'excluded' else 'b-warn' }}">{{ 'May qualify' if v == 'may_qualify' else 'Likely excluded' if v == 'excluded' else 'Proof missing' if v == 'missing_proof' else 'Unclear' }}</span></div>
+        <div class="small" style="margin-bottom:8px">{{ a.protection.summary }}</div>
+        {% for c in a.protection.checks %}
+        <div class="small" style="padding:4px 0;border-top:1px solid var(--line-2)">{{ '✅' if c.state == 'pass' else '❌' if c.state == 'fail' else '❓' }} <b>{{ c.label }}</b>
+          <div class="muted">{{ c.why }}</div></div>
+        {% endfor %}
+        <div class="muted small" style="margin-top:8px">From PayPal's published US terms. PayPal alone decides eligibility.</div>
+      </div>
+      <div class="card">
+        <h3>What each choice costs</h3>
+        {% set m = a.money %}
+        <table class="small">
+          <tr><td>Fight and win</td><td class="num"><b>{{ m.win }} {{ m.currency }}</b></td></tr>
+          <tr><td>Fight and lose</td><td class="num"><b>{{ m.lose }} {{ m.currency }}</b></td></tr>
+          {% if m.offer %}<tr><td>Buyer accepts your offer</td><td class="num"><b>{{ m.offer }} {{ m.currency }}</b></td></tr>{% endif %}
+          <tr><td>Accept the claim</td><td class="num"><b>{{ m.accept }} {{ m.currency }}</b></td></tr>
+        </table>
+        {% if m.breakeven_pct is not none %}<div class="small" style="margin-top:8px">Fighting beats this offer if your chance of winning is above <b>{{ m.breakeven_pct }}%</b>. We don't guess that chance: nobody publishes win rates for PayPal sellers.</div>{% endif %}
+        <div class="muted small" style="margin-top:8px">{{ m.basis }} Calculated by code from PayPal's published US fees. Excludes goods, shipping and High Volume fees.</div>
+      </div>
+    </div>
+    {% endif %}
+
+    <details class="section">
+      <summary>Evidence<span class="hint">{{ evidence | length }} items</span></summary>
+      <div class="body">
+      {% for e in evidence %}
+        <div class="ev {{ 'untrusted' if not e.trusted }}" id="{{ e.id }}">
+          <span class="id">{{ e.id }}</span>
+          <div class="small" style="flex:1">
+            <b>{{ e.source }}</b>
+            {% if not e.trusted %}<span class="badge b-warn">written by buyer</span>{% endif %}
+            {% if e.content.injection_suspected %}<span class="badge b-bad">manipulation attempt, ignored</span>{% endif %}
+            <div>{{ e.summary }}</div>
+            {% if e.content.text %}<div class="quote">“{{ e.content.text }}”</div>{% endif %}
+          </div>
+        </div>
+      {% endfor %}
+      </div>
+    </details>
+
+    <details class="section">
+      <summary>How the AI team worked<span class="hint">{{ a.steps | length }} steps · {{ a.seconds }}s</span></summary>
+      <div class="body">
+      <ol class="timeline small">
+        {% for s in a.steps %}
+          {% set k = s.kind %}
+          <li><span class="n">{{ loop.index }}</span>
+            <span class="who">{{ s.agent }}</span>
+            <span class="badge {{ 'b-ai' if k == 'ai' else 'b-warn' if k == 'tool' else 'b-info' if k == 'code+ai' else 'b-gray' }}">{{ 'AI' if k == 'ai' else 'tool call' if k == 'tool' else 'code + AI' if k == 'code+ai' else 'code' }}</span>
+            <div class="muted" style="margin-top:2px;word-break:break-word">{{ s.what }}</div></li>
+        {% endfor %}
+      </ol>
+      <div class="muted small">Model <span class="mono">{{ a.model }}</span> · analysed {{ a.created_at[:16].replace('T', ' ') }} UTC</div>
+      </div>
+    </details>
+
+    {% if audit %}
+    <details class="section">
+      <summary>Activity on this case<span class="hint">{{ audit | length }} entries</span></summary>
+      <div class="body">
+      {% for r in audit %}<div class="small" style="padding:3px 0"><span class="muted">{{ r.ts[:16].replace('T',' ') }}</span> · <b>{{ activity_label(r.action) }}</b> <span class="muted">by {{ r.actor }}</span></div>{% endfor %}
+      <div class="small" style="margin-top:8px"><a href="/audit">Open the full activity log →</a></div>
+      </div>
+    </details>
+    {% endif %}
+  </div>
+
+  <aside><div class="decision">
+    {% if submissions %}
+    <div class="card" style="border-color:color-mix(in srgb, var(--ok) 45%, transparent)">
+      <h3>✓ Filed with PayPal</h3>
+      <div class="small">PayPal has your response on record{% if submissions[-1].date %} since {{ submissions[-1].date[:16].replace('T', ' ') }} UTC{% endif %}. It's now with PayPal to decide.</div>
+      <details class="small" style="margin-top:8px"><summary class="muted">What PayPal received</summary>
+        <div class="quote" style="white-space:pre-wrap;font-style:normal;border-color:var(--ok);background:var(--ok-bg)">{{ submissions[-1].notes or 'Filed without notes.' }}</div></details>
+    </div>
+    {% endif %}
+
+    <div class="card">
+      <h3>{{ 'Add to your response' if submissions else 'Your decision' }}</h3>
+      {% if requested and not submissions %}<div class="small" style="margin-bottom:10px"><b>PayPal asked you for:</b> {{ requested | join(', ') }}</div>{% endif %}
+      {% if not allowed %}
+      <div class="banner demo small"><span><b>PayPal isn't accepting replies on this dispute yet.</b> Your case is ready. DisputeDesk keeps checking, and the buttons appear as soon as PayPal opens it.</span></div>
+      {% endif %}
+
+      <form method="post" action="/disputes/{{ d.dispute_id }}/approve" class="stack">
+        <label class="small" for="reply"><b>Your reply</b> <span class="muted">Built from proven claims. You can edit it.</span></label>
+        <textarea id="reply" name="reply_text">{{ a.reply_text }}</textarea>
+        {% if 'provide_evidence' in allowed %}<button class="block" name="action" value="submit_evidence" data-confirm="Your reply and the list of your evidence go to PayPal. You can't take this back.">Approve &amp; submit evidence</button>{% endif %}
+        {% if 'provide_supporting_info' in allowed and 'provide_evidence' not in allowed %}
+          <button class="block" name="action" value="submit_supporting_info" data-confirm="Your reply and the list of your evidence go to PayPal's reviewer. You can't take this back.">Approve &amp; send case to PayPal</button>
+          <div class="muted small">PayPal is reviewing this case, so this goes to its reviewer as supporting information.</div>
+        {% endif %}
+        {% if 'send_message' in allowed %}<button class="secondary block" name="action" value="send_message" data-confirm="Your reply goes to the buyer as a message.">Send as a message instead</button>{% endif %}
+      </form>
+
+      {% if 'make_offer' in allowed %}
+      <form method="post" action="/disputes/{{ d.dispute_id }}/approve" class="stack" style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line)">
+        <label class="small" for="offer"><b>Offer a partial refund</b> <span class="muted">Up to {{ max_offer_pct }}%, enforced by code</span></label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="offer" type="text" name="offer_amount" inputmode="decimal" value="{{ a.advice.offer_amount or '' }}" placeholder="0.00" style="max-width:130px">
+          <span class="muted">{{ a.advice.currency }}</span>
+        </div>
+        <textarea name="note" style="min-height:76px" aria-label="Note to the buyer">{{ a.settle_note or '' }}</textarea>
+        <button class="secondary block" name="action" value="make_offer" data-confirm="This offers the buyer a refund. If they accept, the money goes to them.">Send offer</button>
+      </form>
+      {% endif %}
+
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)" class="small">
+        <b>Evidence pack</b><br><a href="/disputes/{{ d.dispute_id }}/pack" target="_blank">Print or save as PDF</a> · <a href="/disputes/{{ d.dispute_id }}/pack?format=txt">Download .txt</a>
+      </div>
+
+      {% if 'accept_claim' in allowed %}
+      <details style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)"><summary class="small muted">Accept the claim and refund the buyer</summary>
+        <form method="post" action="/disputes/{{ d.dispute_id }}/approve" class="stack" style="margin-top:8px">
+          <div class="small muted">The buyer gets the full amount and the case closes. To confirm, type ACCEPT.</div>
+          <input type="text" name="confirm" placeholder="ACCEPT" aria-label="Type ACCEPT to confirm">
+          <button class="danger block" name="action" value="accept_claim">Accept claim</button>
+        </form>
+      </details>
+      {% endif %}
+    </div>
+  </div></aside>
+</div>
+
+<dialog class="confirm" id="confirm-dialog" aria-labelledby="confirm-title">
+  <h3 id="confirm-title">Send this to PayPal?</h3>
+  <p class="small muted" id="confirm-text" style="margin:0"></p>
+  <div class="row"><button type="button" class="secondary" id="confirm-no">Not yet</button><button type="button" id="confirm-yes">Yes, send it</button></div>
+</dialog>
+<script>
+(function () {
+  const dialog = document.getElementById('confirm-dialog');
+  let pending = null;
+  document.querySelectorAll('button[data-confirm]').forEach(btn => btn.addEventListener('click', e => {
+    if (!dialog.showModal) return;   // very old browser: the normal form post still works
+    e.preventDefault();
+    pending = btn;
+    document.getElementById('confirm-text').textContent = btn.dataset.confirm;
+    dialog.showModal();
+  }));
+  document.getElementById('confirm-no').onclick = () => dialog.close();
+  document.getElementById('confirm-yes').onclick = () => {
+    dialog.close();
+    const btn = pending, form = btn.form;
+    const field = document.createElement('input');   // keep the action when the button is disabled
+    field.type = 'hidden'; field.name = btn.name; field.value = btn.value;
+    form.appendChild(field);
+    form.querySelectorAll('button').forEach(b => { b.disabled = true; });
+    btn.textContent = 'Sending…';
+    form.submit();
+  };
+})();
+</script>
+{% endif %}
+{% endblock %}

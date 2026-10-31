@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}Deadlines · DisputeDesk{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@bryntum/scheduler-trial@7.3.8/scheduler.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@bryntum/scheduler-trial@7.3.8/svalbard-light.css" media="(prefers-color-scheme: light)">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@bryntum/scheduler-trial@7.3.8/svalbard-dark.css" media="(prefers-color-scheme: dark)">
+<style>
+  #scheduler { height: 240px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .b-sch-event.dd-late, .b-sch-event.dd-critical, .b-sch-event.dd-overdue { background: var(--bad) !important; color: #fff !important; }
+  .b-sch-event.dd-soon { background: #c98a00 !important; color: #fff !important; }
+  .b-sch-event.dd-ok { background: var(--ok) !important; color: #fff !important; }
+  .b-sch-event { opacity: 1 !important; }
+  .b-sch-event .dd-block, .b-sch-event .dd-block * { color: #fff !important; }
+  .dd-block { font-size: 12px; line-height: 1.3; white-space: normal; }
+  .tl { position: relative; }
+  .tl-axis { position: relative; height: 22px; border-bottom: 1px solid var(--line); margin-left: 220px; }
+  .tl-tick { position: absolute; top: 0; font-size: 11px; color: var(--muted); transform: translateX(-50%); white-space: nowrap; }
+  .tl-row { display: flex; align-items: center; border-bottom: 1px solid var(--line); min-height: 52px; }
+  .tl-label { width: 220px; flex: none; padding: 6px 10px 6px 0; font-size: 13px; }
+  .tl-track { position: relative; flex: 1; height: 52px; }
+  .tl-bar { position: absolute; top: 14px; height: 24px; border-radius: 6px; font-size: 12px; font-weight: 600;
+            padding: 3px 8px; white-space: nowrap; overflow: hidden; color: #fff; }
+  .tl-bar.ok { background: var(--ok); } .tl-bar.soon { background: #c98a00; }
+  .tl-bar.critical, .tl-bar.overdue { background: var(--bad); }
+  .tl-bar.est { background-image: repeating-linear-gradient(45deg, transparent 0 6px, rgba(255,255,255,.18) 6px 12px); }
+  .tl-today { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--brand); z-index: 2; }
+  .tl-today span { position: absolute; top: -20px; left: 4px; font-size: 11px; color: var(--brand); font-weight: 700; }
+  .legend span { margin-right: 14px; }
+  @media (max-width: 800px) {
+    .tl-axis { margin-left: 0; } .tl-row { flex-direction: column; align-items: stretch; }
+    .tl-label { width: auto; } .tl-track { height: 44px; }
+  }
+</style>
+{% endblock %}
+{% block content %}
+<div class="page-head"><div>
+  <h1>Deadline board</h1>
+  <div class="sub">Plan who answers which case, and when. Colours show time left until the reply is due.</div>
+</div></div>
+
+{% if unplanned %}
+<div class="banner err"><span>⚠ <b>{{ unplanned | length }} {{ 'case has' if unplanned | length == 1 else 'cases have' }} a deadline but no time planned:</b>
+  {% for u in unplanned %}<a class="mono" href="/disputes/{{ u.dispute_id }}">{{ u.dispute_id }}</a> ({{ u.amount }}, {{ u.readiness | lower }}){{ ', ' if not loop.last }}{% endfor %}</span>
+  <form method="post" action="/board/autoplan" style="margin-left:auto;flex:none"><button style="white-space:nowrap">Plan them for me</button></form></div>
+{% endif %}
+
+<div class="card" id="scheduler-card" hidden>
+  <div class="card-head"><h3>Who works on what, and when</h3>
+    <div style="display:flex;gap:6px"><button class="secondary" id="zoom-hours">Hours</button><button class="secondary" id="zoom-days">All deadlines</button></div></div>
+  <div class="small muted" style="margin-bottom:8px">Drag a block to replan it. This is your own plan: nothing here goes to PayPal, and PayPal's deadlines don't move.</div>
+  <div id="scheduler"></div>
+  <div class="small" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+    <span class="badge b-ok">More than 5 days</span><span class="badge b-warn">2 to 5 days</span><span class="badge b-bad">Under 2 days, or planned after the deadline</span>
+  </div>
+</div>
+
+<div class="card" id="plain-board">
+  {% if not rows %}
+    <p>No open disputes with a deadline. Load or sync disputes on the <a href="/">dashboard</a>.</p>
+  {% else %}
+  <div class="tl">
+    <div class="tl-axis">{% for t in ticks %}<div class="tl-tick" style="left:{{ t.left }}%">{{ t.label }}</div>{% endfor %}</div>
+    {% for r in rows %}
+    <div class="tl-row">
+      <div class="tl-label">
+        <a href="/disputes/{{ r.d.dispute_id }}" class="mono">{{ r.d.dispute_id }}</a>
+        <div class="muted">{{ reason_label(r.d.reason) }} · {{ r.amount }}
+          {% if r.decision %}· <b>{{ r.decision | upper }}</b>{% endif %}</div>
+      </div>
+      <div class="tl-track">
+        <div class="tl-today" style="left:{{ today }}%">{% if loop.first %}<span>today</span>{% endif %}</div>
+        <div class="tl-bar {{ r.dl.urgency }}{% if r.dl.estimated %} est{% endif %}"
+             style="left:{{ r.left }}%;width:{{ r.width }}%"
+             title="Reply by {{ r.dl.due[:16].replace('T',' ') }} UTC{% if r.dl.estimated %} (estimated){% endif %}">
+          {% if r.dl.urgency == 'overdue' %}overdue{% else %}{{ (r.dl.hours_left / 24) | round(1) }} days left{% endif %}
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+<script src="https://cdn.jsdelivr.net/npm/@bryntum/scheduler-trial@7.3.8/scheduler.umd.js"></script>
+<script>
+(async function () {
+  if (!window.bryntum || !window.bryntum.scheduler) return;   // CDN blocked: the plain timeline below still works
+  const data = await (await fetch('/board/data')).json();
+  const now = new Date(data.now), day = 86400000;
+  const dues = data.blocks.concat(data.unplanned).map(b => new Date(b.due).getTime());
+  const end = new Date(Math.max(now.getTime() + 7 * day, ...dues) + day);
+  const esc = t => String(t).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+  document.getElementById('scheduler-card').hidden = false;
+  const scheduler = new bryntum.scheduler.Scheduler({
+    appendTo: 'scheduler', startDate: new Date(now.getTime() - 3600000), endDate: end, viewPreset: 'hourAndDay', tickSize: 120, rowHeight: 76, barMargin: 8,
+    columns: [{ text: 'Handler', field: 'name', width: 110 }],
+    resources: data.handlers.map(h => ({ id: h, name: h })),
+    events: data.blocks.map(b => ({ id: b.dispute_id, resourceId: b.handler, startDate: new Date(b.start), endDate: new Date(b.end),
+      name: b.dispute_id, cls: b.late ? 'dd-late' : 'dd-' + b.urgency, block: b })),
+    timeRanges: data.blocks.concat(data.unplanned).map(b => ({ id: 'due-' + b.dispute_id, startDate: new Date(b.due), duration: 0,
+      name: 'Due ' + b.dispute_id.slice(-5) + (b.estimated ? ' (est.)' : '') })),
+    features: { timeRanges: { showCurrentTimeLine: true }, eventEdit: false, eventMenu: false, scheduleMenu: false, eventTooltip: {
+      template: ({ eventRecord: r }) => `<b>${esc(r.block.dispute_id)}</b><br>${esc(r.block.amount)}<br>${esc(r.block.readiness)}<br>Reply by ${esc(r.block.due.slice(0, 16).replace('T', ' '))} UTC${r.block.estimated ? ' (estimated)' : ''}${r.block.late ? '<br><b>Planned after the deadline</b>' : ''}` } },
+    eventRenderer: ({ eventRecord: r }) => `<div class="dd-block"><b>${esc(r.block.amount)}</b>${r.block.late ? ' · after deadline' : ''}<br>${esc(r.block.readiness)}</div>`,
+    listeners: {
+      async eventDrop({ eventRecords }) { for (const r of eventRecords) await save(r); },
+      async eventResizeEnd({ eventRecord, changed }) { if (changed !== false) await save(eventRecord); }
+    }
+  });
+  async function save(r) {
+    const res = await fetch('/board/block', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+      dispute_id: r.id, handler: r.resourceId, start: r.startDate.toISOString(), end: r.endDate.toISOString() }) });
+    location.reload();
+    return res;
+  }
+  document.getElementById('plain-board').hidden = true;
+  document.getElementById('zoom-hours').onclick = () => { scheduler.viewPreset = 'hourAndDay'; scheduler.tickSize = 120; scheduler.scrollToDate(now, { block: 'start' }); };
+  document.getElementById('zoom-days').onclick = () => { scheduler.viewPreset = 'dayAndWeek'; scheduler.tickSize = 90; };
+})();
+</script>
+{% endblock %}

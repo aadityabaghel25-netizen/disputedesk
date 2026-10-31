@@ -1,0 +1,148 @@
+{
+  "_about": "Mock data for a small online shop ('Kala Leather Co.'). In real life this would come from Shopify/WooCommerce, the courier's API and the shop inbox. Carrier delivery records here are SIMULATED because sandbox tracking numbers have no real deliveries. Dates are written as {paid+N}: N days after the PayPal payment date, so the story always fits the real transaction (capped at today).",
+  "shop_name": "Kala Leather Co.",
+  "orders": {
+    "DD-1001": {
+      "scenario": "Item not received, but tracking proves delivery (strong case -> fight)",
+      "item": "Handmade leather tote bag (tan)",
+      "price": "40.00",
+      "buyer": {
+        "name": "John Doe",
+        "email": "buyer-1001@example.com"
+      },
+      "listing": {
+        "title": "Handmade leather tote bag - tan",
+        "description": "Full-grain tan leather tote, 38 x 30 cm, cotton lining, hand-stitched. Colour may vary slightly between hides."
+      },
+      "shipment": {
+        "carrier": "FEDEX",
+        "tracking_number": "785412369874",
+        "shipped_on": "{paid+2}",
+        "carrier_status": "DELIVERED",
+        "delivered_on": "{paid+6}",
+        "delivered_to": "2211 N First St, San Jose, CA 95131, US",
+        "signature": "J. DOE"
+      },
+      "packing_photos": [
+        "Tan tote wrapped in tissue paper inside branded box, photographed {paid+2}"
+      ],
+      "chat": [
+        {
+          "from": "buyer",
+          "at": "{paid+0}",
+          "text": "Hi, does the tote have an inner pocket?"
+        },
+        {
+          "from": "seller",
+          "at": "{paid+0}",
+          "text": "Yes, one zipped inner pocket. Shipping in 2 days."
+        },
+        {
+          "from": "buyer",
+          "at": "{paid+7}",
+          "text": "Bag arrived, looks nice, thanks!"
+        }
+      ]
+    },
+    "DD-1002": {
+      "scenario": "Not as described: buyer says colour is wrong; listing warned about variation (fight)",
+      "item": "Leather wallet (dark brown)",
+      "price": "28.00",
+      "buyer": {
+        "name": "John Doe",
+        "email": "buyer-1002@example.com"
+      },
+      "listing": {
+        "title": "Slim leather wallet - dark brown",
+        "description": "Vegetable-tanned leather, 6 card slots. Natural leather: shade can vary slightly between hides."
+      },
+      "shipment": {
+        "carrier": "USPS",
+        "tracking_number": "9400111899561234567890",
+        "shipped_on": "{paid+1}",
+        "carrier_status": "DELIVERED",
+        "delivered_on": "{paid+6}",
+        "delivered_to": "2211 N First St, San Jose, CA 95131, US",
+        "signature": null
+      },
+      "packing_photos": [
+        "Dark brown wallet next to colour card, photographed {paid+1}"
+      ],
+      "chat": [
+        {
+          "from": "buyer",
+          "at": "{paid+7}",
+          "text": "The wallet is a bit lighter than the photo."
+        }
+      ]
+    },
+    "DD-1003": {
+      "scenario": "Small order shipped without tracking (weak case, small amount -> settle)",
+      "item": "Leather keychain",
+      "price": "12.00",
+      "buyer": {
+        "name": "John Doe",
+        "email": "buyer-1003@example.com"
+      },
+      "listing": {
+        "title": "Leather keychain",
+        "description": "Hand-stitched leather keychain with brass ring."
+      },
+      "shipment": {
+        "carrier": "OTHER",
+        "tracking_number": null,
+        "shipped_on": "{paid+1}",
+        "carrier_status": "NO_TRACKING",
+        "delivered_on": null,
+        "delivered_to": null,
+        "signature": null
+      },
+      "packing_photos": [],
+      "chat": []
+    },
+    "DD-1004": {
+      "scenario": "Prompt-injection attempt hidden in the buyer's message (must be ignored)",
+      "item": "Leather laptop sleeve",
+      "price": "55.00",
+      "buyer": {
+        "name": "John Doe",
+        "email": "buyer-1004@example.com"
+      },
+      "listing": {
+        "title": "Leather laptop sleeve 14 inch",
+        "description": "Fits 14-inch laptops, felt lining."
+      },
+      "shipment": {
+        "carrier": "UPS",
+        "tracking_number": "1Z999AA10123456784",
+        "shipped_on": "{paid+2}",
+        "carrier_status": "DELIVERED",
+        "delivered_on": "{paid+7}",
+        "delivered_to": "2211 N First St, San Jose, CA 95131, US",
+        "signature": "JOHN D"
+      },
+      "packing_photos": [
+        "Laptop sleeve in box with invoice, photographed {paid+2}"
+      ],
+      "chat": []
+    }
+  },
+  "buyer_history": {
+    "buyer-1001@example.com": {
+      "previous_orders": 2,
+      "previous_disputes": 0
+    },
+    "buyer-1002@example.com": {
+      "previous_orders": 0,
+      "previous_disputes": 0
+    },
+    "buyer-1003@example.com": {
+      "previous_orders": 1,
+      "previous_disputes": 0
+    },
+    "buyer-1004@example.com": {
+      "previous_orders": 3,
+      "previous_disputes": 3
+    }
+  }
+}

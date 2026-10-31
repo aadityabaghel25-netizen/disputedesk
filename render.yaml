@@ -1,0 +1,39 @@
+# Render "Blueprint": tells Render how to run DisputeDesk.
+# In Render: New + -> Blueprint -> pick your GitHub repo. Then fill in the secret values.
+services:
+  - type: web
+    name: disputedesk
+    runtime: python
+    plan: starter
+    disk:                       # keeps SQLite across restarts and deploys
+      name: disputedesk-data
+      mountPath: /var/data
+      sizeGB: 1
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_PATH
+        value: /var/data/disputedesk.db
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_WEBHOOK_ID
+        sync: false
+      - key: LLM_BASE_URL
+        value: https://api.tokenfactory.nebius.com/v1
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        value: nvidia/nemotron-3-super-120b-a12b
+      - key: AGENT_MODEL
+        value: zai-org/GLM-5.3
+      - key: AI_RUNS_PER_HOUR
+        value: "30"
+      - key: ADMIN_USER
+        value: seller
+      - key: ADMIN_PASSWORD
+        sync: false

@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Insights · DisputeDesk{% endblock %}
+{% block head %}
+<style>
+  #studio { height: 860px; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+  .dd-ratio { height: 100%; padding: 10px 16px; overflow: hidden; display: flex; flex-direction: column; justify-content: center; font-family: Inter, system-ui, sans-serif; color: var(--text); }
+  .dd-ratio .t { font-size: 13px; font-weight: 700; }
+  .dd-ratio .n { font-size: 24px; font-weight: 800; letter-spacing: -.02em; margin: 0 0 6px; }
+  .dd-ratio .bar { position: relative; height: 10px; border-radius: 999px; background: var(--line-2); }
+  .dd-ratio .fill { position: absolute; inset: 0 auto 0 0; border-radius: 999px; background: var(--ok); }
+  .dd-ratio.over .fill { background: var(--bad); }
+  .dd-ratio .mark { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--text); }
+  .dd-ratio .s { font-size: 11.5px; line-height: 1.35; color: var(--muted); margin-top: 6px; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="page-head"><div>
+  <h1>Insights</h1>
+  <div class="sub">What your AI team proved, what it refused to say, and where your risk sits. Buyer messages are never in this data.{% if ask_ai %} To ask the AI, click Edit dashboard.{% endif %}</div>
+</div><button class="secondary" id="studio-edit" hidden>Edit dashboard</button></div>
+{% if sample %}<div class="small muted" style="margin:-8px 0 12px"><b>Sample data:</b> rows marked "Sample history" and the sales total are made up to show the dashboard. They hold no outcomes and imply no win rate.</div>{% endif %}
+<div id="studio-fallback" class="card" hidden>The dashboard library couldn't load. Your disputes are all on the <a href="/">dashboard</a>.</div>
+<div id="studio"></div>
+<script src="https://cdn.jsdelivr.net/npm/ag-studio@3.0.0/dist/umd/ag-studio.min.js"></script>
+<script src="/static/studio-adapter.js"></script>
+<script>
+(async function () {
+  const box = document.getElementById('studio');
+  if (!window.agStudio) { box.hidden = true; document.getElementById('studio-fallback').hidden = false; return; }
+  const data = await (await fetch('/insights/data')).json();
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const fmt = text => ({ title: { enabled: true, text, typography: { fontFamily: 'Inter, system-ui, sans-serif', fontSize: 14, fontWeight: 'bold', fontStyle: 'normal' } } });
+  const type = (fontSize, fontWeight) => ({ fontFamily: 'Inter, system-ui, sans-serif', fontSize, fontWeight, fontStyle: 'normal' });
+  const value = (text, id, aggregation) => ({ type: 'value', dataMapping: { value: [{ id, aggregation }] },
+    format: { title: { enabled: true, text, typography: type(13, 'bold') }, caption: { enabled: true, text: '', typography: type(0) }, style: { typography: type(26, 'bold') } } });
+
+  class RatioTile {
+    init(params) { this.el = document.createElement('div'); this.draw(); }
+    refresh() { this.draw(); }
+    getGui() { return this.el; }
+    destroy() {}
+    draw() {
+      const r = data.ratio, el = this.el;
+      if (!r) { el.className = 'dd-ratio'; el.innerHTML = '<div class="t">Dispute ratio vs PayPal\'s 1.5% line</div><div class="s">Needs your total sales, which PayPal\'s dispute data doesn\'t include.</div>'; return; }
+      const pct = r.disputes * 100 / r.sales, over = pct >= r.limit_pct, scale = Math.max(r.limit_pct * 2, pct);
+      el.className = 'dd-ratio' + (over ? ' over' : '');
+      el.innerHTML = `<div class="t">Dispute ratio vs PayPal's 1.5% line</div><div class="n">${pct.toFixed(2)}%</div>
+        <div class="bar"><div class="fill" style="width:${pct * 100 / scale}%"></div><div class="mark" style="left:${r.limit_pct * 100 / scale}%"></div></div>
+        <div class="s">${r.disputes} disputes on ${r.sales} sales. At ${r.limit_pct}% with over 100 sales in 3 months, PayPal's fee rises from $15 to $30 and can apply even on a win.</div>`;
+    }
+  }
+
+  const page = {
+    id: 'overview',
+    widgets: {
+      money: value('Money disputed', 'cases.amount', 'sum'),
+      kept: value('Claims proven', 'cases.kept', 'sum'),
+      struck: value('Claims struck', 'cases.struck', 'sum'),
+      flagged: value('Manipulation flagged', 'cases.flagged', 'sum'),
+      ratio: { type: 'dd-ratio', dataMapping: { value: [{ id: 'cases.amount', aggregation: 'sum' }] } },
+      decisions: { type: 'donut-chart', dataMapping: { categoryKey: [{ id: 'cases.decision' }], valueKey: [{ id: 'cases.amount', aggregation: 'sum' }] }, format: fmt('Money by recommendation') },
+      protection: { type: 'bar-chart-grouped', dataMapping: { categoryKey: [{ id: 'cases.protection' }], valueKey: [{ id: 'cases.amount', aggregation: 'sum' }] }, format: fmt('Seller Protection check, by money') },
+      monthly: { type: 'column-chart-stacked', dataMapping: { categoryKey: [{ id: 'cases.month' }], valueKey: [{ id: 'cases.kept', aggregation: 'sum' }, { id: 'cases.struck', aggregation: 'sum' }] }, format: fmt('Claims proven vs struck') },
+      grid: { type: 'grid', dataMapping: { cols: ['id', 'reason', 'amount', 'decision', 'protection', 'kept', 'struck', 'filed', 'source'].map(f => ({ id: 'cases.' + f })) }, format: fmt('Every case') },
+    },
+    widgetLayout: {
+      money: { xTrack: 0, yTrack: 0, xSpan: 4, ySpan: 8 }, kept: { xTrack: 4, yTrack: 0, xSpan: 4, ySpan: 8 },
+      struck: { xTrack: 8, yTrack: 0, xSpan: 4, ySpan: 8 }, flagged: { xTrack: 12, yTrack: 0, xSpan: 4, ySpan: 8 },
+      ratio: { xTrack: 16, yTrack: 0, xSpan: 8, ySpan: 8 },
+      decisions: { xTrack: 0, yTrack: 8, xSpan: 7, ySpan: 16 }, protection: { xTrack: 7, yTrack: 8, xSpan: 8, ySpan: 16 }, monthly: { xTrack: 15, yTrack: 8, xSpan: 9, ySpan: 16 },
+      grid: { xTrack: 0, yTrack: 24, xSpan: 24, ySpan: 18 },
+    },
+  };
+  const a = window.agStudio;
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const T = 'textFormat', N = 'integerFormat';
+  const fields = [['id', 'Case', T], ['month', 'Month', T], ['reason', 'Reason', T], ['amount', 'Money disputed', 'currencyFormat'], ['decision', 'Recommendation', T], ['protection', 'Seller Protection check', T],
+    ['kept', 'Claims proven', N], ['struck', 'Claims struck', N], ['flagged', 'Flagged', N], ['serial_buyer', 'Serial buyer', N], ['filed', 'Filed', N], ['source', 'Data', T]].map(([id, name, format]) => ({ id, name, format }));
+  const ai = data.ai && window.ddAdapter ? { ai: ({ api }) => a.createAiHarness(api, {
+    adapter: ddAdapter.openaiAdapter({ endpoint: '/insights/ai', model: 'server-chooses' }),
+    promptStarters: [
+      { label: 'Where is the risk?', prompt: 'Which Seller Protection result holds the most disputed money? Add a chart.' },
+      { label: 'Explain this data', prompt: 'In two sentences, what stands out in these disputes for a small seller? Sample history rows are made up, so say so if they drive the answer.' },
+    ],
+  }) } : {};
+  const studio = (data.ai ? a.createStudioWithAi : a.createStudio)(box, { ...ai,
+    mode: 'view',
+    data: { description: 'Disputes handled by DisputeDesk for one small PayPal seller. Contains no buyer messages.', sources: [{ id: 'cases', description: 'One row per dispute.', data: data.cases, fields }] },
+    initialState: { pages: [page], selectedPageId: 'overview', panels: { filters: { collapsed: true }, data: { collapsed: true } } },
+    theme: a.studioTheme.withParams({ accentColor: css('--brand'), fontFamily: 'Inter, system-ui, sans-serif', browserColorScheme: dark ? 'dark' : 'light',
+      backgroundColor: css('--card'), foregroundColor: css('--text'), borderColor: css('--line'),
+      studioCanvasBackgroundColor: css('--bg'), studioWrapperBackgroundColor: css('--bg'), studioWrapperBorder: false, studioCanvasBorder: false, studioCanvasShadow: false,
+      chartPaletteFills1Color: css('--brand'), chartPaletteStrokes1Color: css('--brand'), chartPaletteFills2Color: css('--bad'), chartPaletteStrokes2Color: css('--bad'),
+      chartPaletteFills3Color: css('--warn'), chartPaletteStrokes3Color: css('--warn') }),
+    widgets: (config) => a.createWidgets({
+      additionalTypes: [{ id: 'dd-ratio', label: 'Dispute ratio', icon: { url: 'https://www.ag-grid.com/studio/images/brandmark.svg' }, comp: RatioTile,
+        dataMapping: { value: { type: 'field', supportedRoles: ['numeric'], requires: { cardinality: 'one' }, required: true } },
+        form: (p) => p.createDefaults({ dataMappingItems: [{ key: 'value', label: 'Value' }] }),
+        defaultSize: { width: 400, height: 160 }, minSize: { width: 240, height: 120 } }],
+      menu: [...config.menu, { label: 'DisputeDesk', widgetIds: ['dd-ratio'] }],
+    }),
+  });
+  const edit = document.getElementById('studio-edit');
+  edit.hidden = false;
+  edit.onclick = () => { const on = edit.dataset.on !== '1'; edit.dataset.on = on ? '1' : ''; studio.setMode ? studio.setMode(on ? 'edit' : 'view') : studio.updateProperties && studio.updateProperties({ mode: on ? 'edit' : 'view' }); edit.textContent = on ? 'Done editing' : 'Edit dashboard'; };
+})();
+</script>
+{% endblock %}

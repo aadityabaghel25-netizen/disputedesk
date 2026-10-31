@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block head %}{% if rows | selectattr("running") | list %}<meta http-equiv="refresh" content="4">{% endif %}{% endblock %}
+{% block content %}
+{% if no_password %}<div class="banner err">This dashboard is public. Set ADMIN_PASSWORD in Render's environment settings.</div>{% endif %}
+
+{% if urgent %}<div class="banner err"><span>⏰ <b>{{ urgent | length }} {{ 'dispute needs' if urgent | length == 1 else 'disputes need' }} a reply within 2 days:</b>
+  {% for r in urgent %}<a href="/disputes/{{ r.d.dispute_id }}" class="mono">{{ r.d.dispute_id }}</a>{{ ', ' if not loop.last }}{% endfor %}.</span></div>{% endif %}
+
+<div class="page-head">
+  <div>
+    <h1>Your disputes</h1>
+    <div class="sub">{% if stats.ready %}<b>{{ stats.ready }} {{ 'case is' if stats.ready == 1 else 'cases are' }} ready for your approval.</b> Soonest deadline first.{% else %}Nothing needs you right now. Soonest deadline first.{% endif %}</div>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+    <a class="btn secondary" href="/deadlines.ics" title="Add every reply deadline to your calendar">Add to calendar</a>
+    <form method="post" action="/sync"><button>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg>
+      Check PayPal now</button></form>
+  </div>
+</div>
+
+<div class="stats">
+  <div class="stat"><div class="top">Money at stake</div><div class="n">${{ stats.at_stake }}</div><div class="l">in {{ stats.open }} open dispute{{ '' if stats.open == 1 else 's' }}</div></div>
+  <div class="stat"><div class="top">Waiting for your approval</div><div class="n">{{ stats.ready }}</div><div class="l">{{ stats.filed }} filed with PayPal{% if stats.won or stats.lost %} · {{ stats.won }} won, {{ stats.lost }} lost{% endif %}</div></div>
+  <div class="stat"><div class="top">Manipulation blocked</div><div class="n">{{ stats.injections }}</div><div class="l">buyer messages that tried to instruct the AI</div></div>
+  <div class="stat"><div class="top">Unproven claims struck</div><div class="n">{{ stats.struck }}</div><div class="l">caught before PayPal saw them</div></div>
+</div>
+
+<div class="card" style="padding:10px 12px">
+  {% if not rows %}
+    <div style="padding:36px 10px;text-align:center">
+      <div style="font-size:17px;font-weight:700">No disputes yet</div>
+      <p class="muted" style="margin:6px 0 14px">When a buyer opens a dispute, it appears here. You can also check PayPal now, or load a case below.</p>
+      <form method="post" action="/sync"><button>Check PayPal now</button></form>
+    </div>
+  {% else %}
+  <div style="display:flex;gap:6px;flex-wrap:wrap;padding:4px 6px 8px" role="group" aria-label="Filter disputes">
+    <button type="button" class="secondary chip" data-filter="all" aria-pressed="true">All ({{ rows | length }})</button>
+    <button type="button" class="secondary chip" data-filter="needs" aria-pressed="false">Needs you ({{ rows | selectattr('next.state', 'equalto', 'needs') | list | length }})</button>
+    <button type="button" class="secondary chip" data-filter="waiting" aria-pressed="false">Waiting on PayPal ({{ rows | selectattr('next.state', 'equalto', 'waiting') | list | length }})</button>
+    <button type="button" class="secondary chip" data-filter="done" aria-pressed="false">Closed ({{ rows | selectattr('next.state', 'equalto', 'done') | list | length }})</button>
+  </div>
+  <div class="table-wrap"><table>
+    <tr><th>Dispute</th><th class="num">Amount</th><th>Reply by</th><th>AI recommendation</th><th>Next step</th></tr>
+    {% for r in rows %}
+    {% set dec = r.a.advice.decision if r.a else None %}
+    {% set risk = (r.a.buyer_risk or {}).level if r.a else None %}
+    <tr class="row-link" data-state="{{ r.next.state }}" onclick="location.href='/disputes/{{ r.d.dispute_id }}'">
+      <td><a href="/disputes/{{ r.d.dispute_id }}" style="font-weight:600">{{ reason_label(r.d.reason) }}</a>
+        <div class="muted mono" style="font-size:11.5px">{{ r.d.dispute_id }}</div></td>
+      <td class="num" style="font-weight:600">{{ r.amount }}</td>
+      <td>
+        {% set u = r.deadline.urgency %}
+        {% if r.deadline.due %}
+          <span class="badge dot {{ 'b-bad' if u in ('overdue','critical') else 'b-warn' if u == 'soon' else 'b-ok' }}">
+            {% if u == 'overdue' %}Overdue{% else %}{{ (r.deadline.hours_left / 24) | round(1) }} days{% endif %}
+          </span>
+          <div class="muted small">{{ r.deadline.due[:10] }}{% if r.deadline.estimated %} (est.){% endif %}</div>
+        {% else %}<span class="muted">None</span>{% endif %}
+      </td>
+      <td>
+        {% if r.running %}<span class="badge b-ai">AI team working…</span>
+        {% elif r.a %}
+          <span class="badge {{ 'b-ok' if dec == 'fight' else 'b-warn' if dec == 'settle' else 'b-bad' }}">{{ dec | upper }}</span>
+          {% if risk == 'high' %}<span class="badge b-bad">Serial disputer</span>{% endif %}
+        {% else %}<span class="muted small">Not run yet</span>{% endif %}
+      </td>
+      <td class="small" style="font-weight:{{ 600 if r.next.state == 'needs' else 400 }};color:{{ 'var(--brand)' if r.next.state == 'needs' else 'var(--muted)' }}">{{ r.next.label }}{% if r.next.state == 'needs' %} →{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  <p id="filter-empty" class="muted small" style="padding:14px 10px;margin:0" hidden>No disputes here.</p>
+  {% endif %}
+</div>
+
+<details class="section">
+  <summary>Load a dispute by ID<span class="hint">If a case hasn't appeared yet</span></summary>
+  <div class="body"><form method="post" action="/disputes/load" style="display:flex;gap:8px;max-width:440px">
+    <input type="text" name="dispute_id" placeholder="PP-R-…" aria-label="Dispute ID"><button class="secondary">Load</button></form></div>
+</details>
+
+<details class="section">
+  <summary>How DisputeDesk is connected<span class="hint">{% if watch_minutes %}Checks PayPal every {{ watch_minutes }} min{% else %}Demo mode{% endif %}</span></summary>
+  <div class="body small">
+    <div>AI model: <span class="mono">{{ model }}</span></div>
+    {% if watch_minutes %}<div>Automatic PayPal check every {{ watch_minutes }} minutes{% if last_watch %}, last at {{ last_watch[11:16] }} UTC{% endif %}.</div>{% endif %}
+    {% if events %}<div style="margin-top:10px"><b>Latest PayPal webhooks</b></div>
+  {% for e in events %}
+    <div class="small" style="padding:4px 0"><span class="mono muted">{{ e.received_at }}</span> · {{ e.event_type }} · <span class="mono">{{ e.resource_id }}</span>
+      {% if e.verified %}<span class="badge b-ok">signature verified</span>{% else %}<span class="badge b-warn">unverified</span>{% endif %}</div>
+  {% endfor %}{% endif %}
+  </div>
+</details>
+<script>
+document.querySelectorAll('.chip').forEach(chip => chip.addEventListener('click', () => {
+  document.querySelectorAll('.chip').forEach(c => c.setAttribute('aria-pressed', c === chip));
+  let shown = 0;
+  document.querySelectorAll('tr[data-state]').forEach(row => {
+    const on = chip.dataset.filter === 'all' || row.dataset.state === chip.dataset.filter;
+    row.hidden = !on; shown += on ? 1 : 0;
+  });
+  document.getElementById('filter-empty').hidden = shown > 0;
+}));
+</script>
+<style>.chip { padding: 5px 11px; font-size: 13px; font-weight: 500; border-radius: 999px; } .chip[aria-pressed="true"] { background: var(--brand-soft); color: var(--brand); border-color: transparent; font-weight: 600; }</style>
+{% endblock %}
