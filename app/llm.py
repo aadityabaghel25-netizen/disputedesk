@@ -224,6 +224,8 @@ class FakeLLM:
         if "[agent:triage]" in system:
             return self._json({"summary": "The buyer says there is a problem with the order and asks for their money back.",
                                "buyer_claim": "Problem with the order."})
+        if "[agent:labeller]" in system:
+            return self._json(self._label(user))
         if "[agent:onboarding]" in system:
             return self._json(self._onboard(user))
         if "[agent:drafter]" in system:
@@ -241,6 +243,14 @@ class FakeLLM:
         return {"role": "assistant", "content": json.dumps(obj)}
 
     @staticmethod
+    def _label(user: str) -> dict:
+        first = user.split("Speaker 2", 1)[0].lower()
+        other = user.lower()
+        shop = bool(re.search(r"thanks for calling|recorded|order", first))
+        them = "Driver" if re.search(r"front door|delivered it|left it", other) else "Buyer"
+        return {"speaker_1": "Agent" if shop else them, "speaker_2": them if shop else "Agent"}
+
+    @staticmethod
     def _onboard(user: str) -> dict:
         turns = json.loads(user.split("CALL_JSON:", 1)[1].split("END_CALL", 1)[0])
         for t in reversed(turns):   # the last thing they said, not the "yes" to being recorded
@@ -248,7 +258,7 @@ class FakeLLM:
                 continue
             words = t["text"].lower()
             hurts = bool(re.search(r"\b(never|not|no)\b", words))
-            topic = "delivery" if t["speaker"] == "carrier" else "receipt" if re.search(r"came|come|arrived|received|got", words) else "other"
+            topic = "delivery" if t["speaker"] == "carrier" else "receipt" if re.search(r"came|come|arrived|received|got", words) else "item_condition" if re.search(r"colou?r|photos|looks", words) else "other"
             stance = "hurts" if hurts else "helps" if topic != "other" else "neutral"
             return {"findings": [{"turn": t["turn"], "quote": t["text"], "topic": topic, "stance": stance}]}
         return {"findings": []}

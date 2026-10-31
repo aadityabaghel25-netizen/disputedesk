@@ -164,32 +164,43 @@
     dialog.confirm h3 { margin: 0 0 6px; font-size: 17px; }
     dialog.confirm .row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
   </style>
+  <link rel="stylesheet" href="/static/agents.css">
 </head>
-<body>
+<body data-path="{{ request.url.path }}">
+<script>
+  // Wide pages (the board and the dashboard) start with the rail closed. Narrow screens always do.
+  (function () {
+    var saved = null;
+    try { saved = localStorage.getItem('dd-rail'); } catch (e) {}
+    var wide = location.pathname === '/board' || location.pathname === '/insights';
+    if (wide || window.innerWidth < 1240 || (saved === 'closed')) document.body.classList.add('rail-closed');
+  })();
+</script>
 <a class="skip" href="#content">Skip to content</a>
 {% set path = request.url.path %}
 {% set attention = request.app.state.service.stats().ready %}
 <aside class="side">
   <a class="logo" href="/" aria-label="DisputeDesk home">
     <span class="mark"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18M5 21h14M6 7h12M6 7l-3 7a3 3 0 0 0 6 0L6 7zm12 0-3 7a3 3 0 0 0 6 0l-3-7z"/></svg></span>
-    <span class="t">DisputeDesk<small>Every sentence proven</small></span>
+    <span class="t">DisputeDesk<small>Your AI dispute team</small></span>
   </a>
   <nav class="main" aria-label="Main">
     <a href="/" class="{{ 'on' if path == '/' or path.startswith('/disputes') }}"{% if path == '/' or path.startswith('/disputes') %} aria-current="page"{% endif %}>
-      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h18M3 12h18M3 17h12"/></svg>Disputes{% if attention %}<span class="count" title="{{ attention }} waiting for your approval">{{ attention }}</span>{% endif %}</a>
-    <a href="/recordings" class="{{ 'on' if path == '/recordings' }}">
-      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>Recordings</a>
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>Command center{% if attention %}<span class="count" title="{{ attention }} waiting for your approval">{{ attention }}</span>{% endif %}</a>
     <a href="/board" class="{{ 'on' if path == '/board' }}">
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>Deadlines</a>
     <a href="/insights" class="{{ 'on' if path == '/insights' }}">
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Insights</a>
     <a href="/rules" class="{{ 'on' if path == '/rules' }}">
-      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg>Rules</a>
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg>Guardrails</a>
     <a href="/proof" class="{{ 'on' if path == '/proof' }}">
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v6c0 5 3.4 8 8 9 4.6-1 8-4 8-9V6l-8-3z"/><path d="m9 12 2 2 4-4"/></svg>Proof</a>
+    <a href="/recordings" class="{{ 'on' if path == '/recordings' }}">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>Calls</a>
     <a href="/audit" class="{{ 'on' if path == '/audit' }}">
-      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Activity</a>
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Agent log</a>
   </nav>
+  <button type="button" class="side-status secondary" data-rail-toggle title="Show or hide agent activity"><span class="pulse idle" id="side-status-dot"></span><span id="side-status-text">Connecting to agents…</span></button>
   <div class="env {{ 'demo' if demo }}"><span class="dot"></span><span>{% if demo %}<b>Demo mode</b>Sample data. Nothing is sent to PayPal.{% else %}<b>PayPal sandbox</b>Connected. You approve every action.{% endif %}</span></div>
 </aside>
 <div class="wrap">
@@ -200,5 +211,28 @@
 </main>
 <footer class="foot">AI drafts, code decides money, you approve every PayPal action.</footer>
 </div>
+
+<aside class="rail" aria-label="Agent activity">
+  <div class="rail-head"><span class="pulse idle" id="rail-dot"></span><h2 id="rail-state" aria-live="polite">Agents</h2>
+    <button type="button" class="secondary rail-close" data-rail-toggle aria-label="Hide agent activity">×</button></div>
+  <div class="rail-body">
+    <div class="rail-section"><div class="rail-title">Working now</div><div id="rail-work"></div></div>
+    <div class="rail-section rail-needs-section"><div class="rail-title">Needs you <span id="needs-count"></span></div><div id="rail-needs"></div></div>
+    <div class="rail-section"><div class="rail-title">Your team</div><div id="rail-agents"></div></div>
+    <div class="rail-section"><div class="rail-title">Latest</div><div id="rail-feed"></div></div>
+  </div>
+</aside>
+<button type="button" class="rail-open" data-rail-toggle><span class="pulse idle"></span>Agents</button>
+
+<div class="drop-overlay" id="drop-overlay"><div><h2>Drop the call here</h2><div class="muted">The agents will take it from here.</div></div></div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<input type="file" id="call-file" accept="audio/*,video/mp4,video/webm" multiple hidden>
+<dialog class="confirm" id="consent-dialog" aria-labelledby="consent-title">
+  <h3 id="consent-title">One thing before the agents start</h3>
+  <p class="small muted" style="margin:0 0 10px">Some US states, including California, need everyone on a call to agree to recording. You only confirm this once, and you can withdraw it under Guardrails. The audio goes to Gnani to be transcribed, and DisputeDesk doesn't keep it.</p>
+  <label class="small" style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" id="consent-box" style="margin-top:3px"><span>Everyone on the calls I add knew they were being recorded and agreed.</span></label>
+  <div class="row"><button type="button" class="secondary" id="consent-no">Not now</button><button type="button" id="consent-yes">Confirm and start</button></div>
+</dialog>
+<script src="/static/agents.js"></script>
 </body>
 </html>

@@ -2,8 +2,8 @@
 {% block title %}Rules · DisputeDesk{% endblock %}
 {% block content %}
 <div class="page-head"><div>
-  <h1>Your rules</h1>
-  <div class="sub">Plain code enforces these limits, not the AI. The AI can't change them, and every change is logged.</div>
+  <h1>Guardrails</h1>
+  <div class="sub">The limits your agents work inside. Plain code enforces them, not the AI. The AI can't change them, and every change is logged.</div>
 </div></div>
 
 <div class="card">
@@ -23,10 +23,21 @@
 </div>
 
 <div class="card small">
+  <h3>Call recording consent</h3>
+  {% if calls_consent %}
+  <div>You confirmed on {{ calls_consent[:10] }} that everyone on the calls you add knew they were being recorded and agreed.</div>
+  <form method="post" action="/recordings/consent" style="margin-top:8px"><button class="secondary" name="consent" value="no">Withdraw</button></form>
+  {% else %}
+  <div class="muted">Not confirmed. You'll be asked when you add your first call.</div>
+  {% endif %}
+</div>
+
+<div class="card small">
   <h3>Always on</h3>
   <ul>
     <li>Nothing is sent to PayPal until you click a button.</li>
     <li>Accepting a claim needs you to type ACCEPT.</li>
+    <li>A call can't reach your reply until you confirm the transcript, and it never replaces carrier proof.</li>
     <li>Buyers who dispute most of their orders never get a settlement suggestion.</li>
     <li>Text written by the buyer is treated as data, never as instructions to the AI.</li>
   </ul>

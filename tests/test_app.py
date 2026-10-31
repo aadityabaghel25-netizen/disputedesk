@@ -32,7 +32,7 @@ from app.service import ActionError, Service  # noqa: E402
 
 def settings(**over):
     s = get_settings()
-    s.llm_provider, s.admin_password, s.paypal_webhook_id = "fake", "", ""
+    s.llm_provider, s.admin_password, s.paypal_webhook_id, s.gnani_api_key = "fake", "", "", ""
     s.allow_unverified_webhooks = False
     for k, v in over.items():
         setattr(s, k, v)
@@ -670,7 +670,7 @@ class AppTests(unittest.TestCase):
             self.assertEqual(client.post("/recordings", data=self._call_form(consent=""), follow_redirects=False).status_code, 303)
             client.post("/recordings", data=self._call_form(filename="other.mp3"))
             stray = s.db.list_calls("")[0]["id"]
-            self.assertIn("Needs a case", client.get("/recordings").text)
+            self.assertIn("Waiting on you", client.get("/recordings").text)
             client.post(f"/recordings/{stray}/assign", data={"dispute_id": "PP-D-DEMO-1002"})
             self.assertEqual(len(s.db.list_calls("PP-D-DEMO-1002")), 1)
             client.post(f"/recordings/{stray}/delete")
@@ -685,25 +685,104 @@ class AppTests(unittest.TestCase):
         s = Service(settings(), db=DB(":memory:"), pp=DemoPayPal(), llm=FakeLLM())
         s.seed_demo()
         self.assertEqual(len(s.db.list_calls("PP-D-DEMO-1003")), 2)
-        self.assertEqual(len(s.db.list_calls("")), 1)
+        self.assertEqual(s.db.list_calls(""), [])
+        self.assertTrue(all(c["reviewed"] for c in s.db.all_calls()))
         result = s.db.latest_analysis("PP-D-DEMO-1003")
         self.assertTrue(any(f["contradicts"] for c in result["call_review"] for f in c["findings"]))
 
-    def test_recording_becomes_a_draft_and_is_not_kept(self):
+    def test_pages_carry_the_live_agent_layer(self):
+        s = self._service()
+        client = TestClient(create_app(s))
+        for path in ("/", "/recordings", "/rules", "/board", "/audit"):
+            page = client.get(path).text
+            for piece in ('id="drop-overlay"', "/static/agents.js", 'id="consent-dialog"'):
+                self.assertIn(piece, page, path)
+        self.assertIn("Live agent run", client.get("/").text)
+        self.assertEqual(client.get("/static/agents.js").status_code, 200)
+
+    def test_consent_can_be_withdrawn(self):
+        s = self._service()
+        client = TestClient(create_app(s))
+        s.set_consent(True, "seller")
+        self.assertIn("Withdraw", client.get("/rules").text)
+        client.post("/recordings/consent", data={"consent": "no"})
+        self.assertFalse(s.consent_on_file())
+
+    def test_dropped_recording_runs_by_itself_and_waits_for_one_click(self):
         s = self._service(gnani_api_key="k")
         client = TestClient(create_app(s))
-        with mock.patch("app.service.gnani_transcribe", return_value="Speaker 1: the parcel came") as stt:
-            r = client.post("/recordings/transcribe", files={"audio": ("DD-1001.mp3", b"sound", "audio/mpeg")})
-        stt.assert_called_once()
-        self.assertIn("Speaker 1: the parcel came", r.text)
-        self.assertEqual(s.db.all_calls(), [])
-        self.assertIn("order DD-1001".split()[1], stt.call_args.kwargs["keyterms"])
+        audio = {"audio": ("DD-1001-buyer.mp3", b"sound", "audio/mpeg")}
+        self.assertEqual(client.post("/recordings/upload", files=audio).status_code, 400)   # consent first
+        draft = "Speaker 1: Thanks for calling. This call is recorded.\nSpeaker 2: Yes, it came on Tuesday."
+        with mock.patch("app.service.gnani_transcribe", return_value=draft) as stt:
+            self.assertEqual(client.post("/recordings/upload", files=audio, data={"consent": "yes"}).status_code, 200)
+            s._call_queue.join()
         self.assertFalse([t for t in stt.call_args.kwargs["keyterms"] if "@" in t])   # no buyer emails go to Gnani
-        with self.assertRaises(ActionError):   # Gnani's draft must be labelled by the seller before it is saved
-            s.add_call(self._call_form(transcript="Speaker 1: the parcel came"), "seller")
-        draft = "Speaker 1: Is this okay?\nSpeaker 2: Yes the parcel came."
-        s.add_call(self._call_form(transcript=draft, speaker_1="Agent", speaker_2="Buyer", filename="DD-1001.mp3"), "seller")
-        self.assertEqual(s.db.list_calls("PP-D-DEMO-1001")[0]["transcript"], "Agent: Is this okay?\nBuyer: Yes the parcel came.")
+        call = s.db.list_calls("PP-D-DEMO-1001")[0]
+        self.assertEqual((call["status"], call["reviewed"]), ("ready", 0))
+        self.assertEqual(call["transcript"], "Agent: Thanks for calling. This call is recorded.\nBuyer: Yes, it came on Tuesday.")
+        self.assertNotIn("sound", json.dumps(call))   # the audio isn't kept
+        first = s.db.latest_analysis("PP-D-DEMO-1001")
+        self.assertTrue(first["call_review"][0]["findings"])
+        self.assertIsNone(first["call_review"][0]["findings"][0]["evidence_id"])   # seen, but not usable yet
+        self.assertNotIn("it came on Tuesday", first["reply_text"])
+        self.assertTrue(any(n["kind"] == "check" for n in s.live_state()["needs"]))
+        self.assertTrue(any("Check the transcript" in x for x in first["call_next_steps"]))
+        with client:
+            client.post(f"/recordings/{call['id']}/confirm", data={"transcript": call["transcript"]})
+        after = s.db.latest_analysis("PP-D-DEMO-1001")
+        self.assertIn("it came on Tuesday", after["reply_text"])
+        self.assertFalse(any(n["kind"] == "check" for n in s.live_state()["needs"]))
+
+    def test_seller_can_fix_who_said_what_before_confirming(self):
+        s = self._service()
+        call_id = s.db.add_call("seller", "buyer", "2026-10-20", "Speaker 1: Hello there.\nSpeaker 2: It came on Tuesday.", "x", None, "DD-1001.mp3", reviewed=False)
+        s.select_recordings()
+        with self.assertRaises(ActionError):
+            s.confirm_call(call_id, "Speaker 1: Hello there.", "seller")
+        s.confirm_call(call_id, "Agent: Hello there.\nBuyer: It came on Tuesday.", "seller")
+        self.assertEqual(s.db.get_call(call_id)["reviewed"], 1)
+
+    def test_failed_transcription_is_shown_and_worker_survives(self):
+        s = self._service(gnani_api_key="k")
+        s.set_consent(True, "seller")
+        with mock.patch("app.service.gnani_transcribe", side_effect=LLMError("Gnani said no (HTTP 500).")):
+            call_id = s.enqueue_recording(b"sound", "bad.mp3", "seller")
+            s._call_queue.join()
+        self.assertEqual(s.db.get_call(call_id)["status"], "failed")
+        self.assertTrue(any(n["kind"] == "failed" for n in s.live_state()["needs"]))
+        with mock.patch("app.service.gnani_transcribe", return_value="Speaker 1: Order DD-1001 is recorded.\nSpeaker 2: It came today."):
+            good = s.enqueue_recording(b"sound", "good.mp3", "seller")
+            s._call_queue.join()
+        self.assertEqual(s.db.get_call(good)["dispute_id"], "PP-D-DEMO-1001")
+
+    def test_restart_marks_unfinished_calls_failed(self):
+        db = DB(":memory:")
+        call_id = db.add_call("seller", "buyer", "2026-10-20", "", "x", None, "a.mp3", status="transcribing", reviewed=False)
+        Service(settings(), db=db, pp=DemoPayPal(), llm=FakeLLM())
+        self.assertEqual(db.get_call(call_id)["status"], "failed")
+
+    def test_sample_call_needs_no_keys_and_live_panel_has_no_call_words(self):
+        s = self._service()
+        s.SAMPLE_PAUSE = 0
+        s.enqueue_sample_call("demo")
+        s._call_queue.join()
+        call = s.db.list_calls("PP-D-DEMO-1002")[0]
+        self.assertEqual(call["reviewed"], 0)
+        self.assertTrue(call["transcript"].startswith("Agent:"))
+        client = TestClient(create_app(s))
+        live = client.get("/agents/live")
+        self.assertEqual(live.status_code, 200)
+        self.assertNotIn("changed my mind", live.text)
+        self.assertTrue(live.json()["feed"])
+        self.assertEqual(len(live.json()["agents"]), 5)
+
+    def test_upload_needs_a_key_and_real_mode_has_no_sample(self):
+        s = self._service()
+        self.assertIn("Gnani", TestClient(create_app(s)).post("/recordings/upload", files={"audio": ("a.mp3", b"x")}, data={"consent": "yes"}).json()["error"])
+        s.demo = False
+        with self.assertRaises(ActionError):
+            s.enqueue_sample_call("seller")
 
     def test_gnani_job_flow_labels_speakers_and_keeps_key_off_the_transcript_link(self):
         seen = []

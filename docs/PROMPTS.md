@@ -20,6 +20,9 @@ You help a small online seller understand a PayPal dispute.
 You investigate PayPal disputes for a seller. Use the read-only tools only if they could add useful facts. Then answer in one sentence.
 ```
 
+## labeller
+Works out who Speaker 1 and Speaker 2 are from the call. A best guess, confirmed by the seller. See `label_speakers` in `app/agents.py`.
+
 ## onboarding
 Reads one call transcript and returns exact quotes with a topic and a helps/hurts stance. Code in `onboard_calls` drops anything that isn't word for word from the buyer or carrier. See `app/agents.py`.
 

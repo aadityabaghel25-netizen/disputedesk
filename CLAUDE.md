@@ -58,7 +58,7 @@ If port 8000 is busy: `lsof -ti:8000 | xargs kill`.
 - `app/llm.py` OpenAI-compatible client, `ask_json` (pydantic structured output), tool loop, FakeLLM
 - `app/agents.py` the agent team (Collector, Onboarding for call recordings, Triage, Investigator, Rule checker, Drafter, Verifier, Advisor, Settle writer)
 - `app/service.py` glue: sync, load-by-id, webhooks, Prevent, analyze, approve, evidence pack
-- `app/main.py` Starlette routes + Basic auth; `app/templates/*` server-rendered pages
+- `app/main.py` Starlette routes + Basic auth; `app/templates/*` server-rendered pages; `app/static/agents.js` live agent layer (rail, drop anywhere), polls `/agents/live`
 - `scripts/` setup + eval; `tests/test_app.py`; `docs/lessons/` teaching notes; `docs/PROMPTS.md` agent prompts
 - Stack choices: Starlette (not FastAPI) and SQLite (not Postgres) for simplicity; Render for hosting.
 

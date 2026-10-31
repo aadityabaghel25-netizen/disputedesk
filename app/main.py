@@ -9,7 +9,8 @@ Routes
   GET  /disputes/{id}           one dispute: evidence, AI draft, struck claims, approve buttons
   POST /disputes/{id}/analyze   run the AI team (in the background)
   POST /disputes/{id}/approve   human-approved action -> PayPal
-  GET  /recordings              call recordings the onboarding agent selects from; POST to add one
+  GET  /recordings              calls the onboarding agent has picked up; POST /recordings/upload runs it in the background
+  GET  /agents/live             what every agent is doing right now (JSON, polled by the live panel)
   POST /sync                    pull disputes from PayPal now
   POST /disputes/load           add one dispute by its ID
   POST /webhooks/paypal         PayPal calls this when a dispute is created/updated
@@ -68,7 +69,8 @@ ACTIVITY_LABELS = {
     "webhook_rejected": "Unverified webhook blocked", "rules_changed": "Your rules changed", "block_planned": "Work planned", "block_moved": "Work moved before the deadline",
     "download_pack": "Evidence pack opened", "prevent_tracking_added": "Tracking added to PayPal", "prevent_no_tracking": "No tracking number to add",
     "prevent_failed": "Tracking could not be added", "watch_failed": "PayPal check failed",
-    "call_added": "Call recording added", "call_removed": "Call recording removed", "call_transcribed": "Call recording transcribed", "call_selected": "Call recording selected for this case",
+    "call_added": "Call recording added", "call_removed": "Call recording removed", "call_transcribed": "Call recording transcribed", "call_selected": "Call recording selected for a case", "call_labelled": "Speakers worked out on a call", "call_confirmed": "You confirmed a call",
+    "call_failed": "A call couldn't be read", "call_consent_confirmed": "You confirmed recording consent", "call_consent_withdrawn": "You withdrew recording consent",
 }
 templates.env.globals["activity_label"] = lambda a: ACTIVITY_LABELS.get(a, a.replace("_", " ").capitalize())
 templates.env.globals["reason_label"] = lambda r: REASON_LABELS.get(r, (r or "Other").replace("_", " ").title())
@@ -137,7 +139,7 @@ async def dispute_page(request: Request):
     a = s.db.latest_analysis(dispute_id)
     cents, cur = core.dispute_amount(d)
     return templates.TemplateResponse(request, "dispute.html", {
-        "calls": s.db.list_calls(dispute_id),
+        "calls": s.db.list_calls(dispute_id), "call_labels": s.CALL_LABELS,
         "d": d, "a": a, "evidence": s.db.get_evidence(dispute_id), "amount": f"{core.from_cents(cents)} {cur}",
         "deadline": core.deadline_info(d), "allowed": core.allowed_actions(d), "demo": s.demo,
         "running": dispute_id in s.running, "audit": s.db.audit_log(dispute_id, 20),
@@ -176,16 +178,21 @@ async def approve(request: Request):
     return RedirectResponse(f"/disputes/{dispute_id}?msg={done}{suffix}.", 303)
 
 
-def _render_recordings(request: Request, s: Service, draft: dict | None = None):
+def _render_recordings(request: Request, s: Service):
     calls = s.db.all_calls()
+    working = ("queued", "transcribing", "labelling", "selecting", "reading")
     return templates.TemplateResponse(request, "recordings.html", {
-        "unmatched": [c for c in calls if not c["dispute_id"]], "selected": [c for c in calls if c["dispute_id"]],
-        "cases": [d["dispute_id"] for d in s.db.list_disputes() if not core.dispute_outcome(d)], "draft": draft or {},
+        "failed": [c for c in calls if c["status"] == "failed"],
+        "unmatched": [c for c in calls if c["status"] == "ready" and not c["dispute_id"]],
+        "to_check": [c for c in calls if c["status"] == "ready" and c["dispute_id"] and not c["reviewed"]],
+        "selected": [c for c in calls if c["status"] not in working and c["status"] != "failed" and c["dispute_id"] and c["reviewed"]],
+        "cases": [d["dispute_id"] for d in s.db.list_disputes() if not core.dispute_outcome(d)],
         "stt_on": bool(s.settings.gnani_api_key), "today": core.datetime.now(core.timezone.utc).date().isoformat(), "demo": s.demo,
         "flash": request.query_params.get("msg"), "error": request.query_params.get("err")})
 
 
 async def recordings(request: Request):
+    """The Calls page, and pasting a transcript by hand when there's no audio."""
     s = svc(request)
     if request.method == "GET":
         return _render_recordings(request, s)
@@ -205,22 +212,61 @@ def _rerun_agents(s: Service, dispute_ids: list[str], back: str, done: str):
 
     def work():
         for dispute_id in allowed:
-            s.analyze_quietly(dispute_id)
+            s.refresh_case(dispute_id, already_counted=True)   # waits if the team is already on this case
     return RedirectResponse(f"{back}?msg={urllib.parse.quote(done + note)}", 303, background=BackgroundTask(work))
 
 
-async def transcribe_recording(request: Request):
-    """Fills the review form. Nothing is evidence until the seller checks it and saves."""
+async def upload_recording(request: Request):
+    """Takes the file and answers at once. The agents do the rest in the background."""
     s = svc(request)
-    upload = (await request.form()).get("audio")
+    form = await request.form()
+    upload = form.get("audio")
     try:
         if not hasattr(upload, "read"):
             raise ActionError("Choose an audio file.")
         audio = await upload.read(s.MAX_AUDIO + 1)
-        text, fingerprint = await run_in_threadpool(s.transcribe_call, audio, upload.filename or "call", s.settings.admin_user)
+        call_id = s.enqueue_recording(audio, upload.filename or "call", s.settings.admin_user, consent=form.get("consent") == "yes")
     except ActionError as e:
-        return RedirectResponse(f"/recordings?err={urllib.parse.quote(str(e))}", 303)
-    return _render_recordings(request, s, {"transcript": text, "audio_sha256": fingerprint, "filename": upload.filename or ""})
+        return JSONResponse({"error": str(e)}, 400)
+    return JSONResponse({"id": call_id})
+
+
+async def sample_recording(request: Request):
+    s = svc(request)
+    try:
+        return JSONResponse({"id": s.enqueue_sample_call(s.settings.admin_user)})
+    except ActionError as e:
+        return JSONResponse({"error": str(e)}, 400)
+
+
+async def confirm_recording(request: Request):
+    s = svc(request)
+    call_id = request.path_params["call_id"]
+    form = await request.form()
+    try:
+        dispute_id = s.confirm_call(call_id, str(form.get("transcript") or ""), s.settings.admin_user)
+    except ActionError as e:
+        call = s.db.get_call(call_id) or {}
+        back = f"/disputes/{call['dispute_id']}" if call.get("dispute_id") else "/recordings"
+        return RedirectResponse(f"{back}?err={urllib.parse.quote(str(e))}#calls", 303)
+    return _rerun_agents(s, [dispute_id] if dispute_id else [], f"/disputes/{dispute_id}" if dispute_id else "/recordings", "Confirmed.")
+
+
+async def calls_consent(request: Request):
+    s = svc(request)
+    s.set_consent((await request.form()).get("consent") == "yes", s.settings.admin_user)
+    return RedirectResponse("/rules?msg=Saved.", 303)
+
+
+AGENT_ACTORS = {"ai": "Agents", "system": "Agents", "paypal": "PayPal", "demo": "Demo"}
+
+
+async def agents_live(request: Request):
+    s = svc(request)
+    state = s.live_state()
+    state["feed"] = [{"ts": r["ts"][11:16], "who": AGENT_ACTORS.get(r["actor"], "You"), "what": ACTIVITY_LABELS.get(r["action"], r["action"].replace("_", " ").capitalize()),
+                      "dispute_id": r["dispute_id"]} for r in s.db.audit_log(limit=14)]
+    return JSONResponse(state)
 
 
 async def assign_recording(request: Request):
@@ -362,7 +408,7 @@ async def rules(request: Request):
             return RedirectResponse(f"/rules?err={str(e)}", 303)
         return RedirectResponse("/rules?msg=Rules+saved.+New+analyses+use+them.", 303)
     return templates.TemplateResponse(request, "rules.html", {
-        "settle_max_usd": f"{s.settings.settle_max_usd:.2f}", "max_offer_pct": s.settings.max_offer_pct,
+        "settle_max_usd": f"{s.settings.settle_max_usd:.2f}", "max_offer_pct": s.settings.max_offer_pct, "calls_consent": s.consent_on_file(),
         "demo": s.demo, "flash": request.query_params.get("msg"), "error": request.query_params.get("err")})
 
 
@@ -521,7 +567,11 @@ def create_app(service: Service | None = None) -> Starlette:
         Route("/disputes/{dispute_id}/approve", approve, methods=["POST"]),
         Route("/disputes/{dispute_id}/pack", pack),
         Route("/recordings", recordings, methods=["GET", "POST"]),
-        Route("/recordings/transcribe", transcribe_recording, methods=["POST"]),
+        Route("/recordings/upload", upload_recording, methods=["POST"]),
+        Route("/recordings/sample", sample_recording, methods=["POST"]),
+        Route("/recordings/{call_id:int}/confirm", confirm_recording, methods=["POST"]),
+        Route("/recordings/consent", calls_consent, methods=["POST"]),
+        Route("/agents/live", agents_live),
         Route("/recordings/{call_id:int}/assign", assign_recording, methods=["POST"]),
         Route("/recordings/{call_id:int}/delete", remove_recording, methods=["POST"]),
         Route("/sync", sync, methods=["POST"]),

@@ -75,7 +75,10 @@ CREATE TABLE IF NOT EXISTS calls (
     origin       TEXT NOT NULL,
     audio_sha256 TEXT,
     filename     TEXT NOT NULL DEFAULT '',
-    matched_on   TEXT NOT NULL DEFAULT ''
+    matched_on   TEXT NOT NULL DEFAULT '',
+    status       TEXT NOT NULL DEFAULT 'ready',
+    reviewed     INTEGER NOT NULL DEFAULT 1,
+    error        TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS audit (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,9 +107,10 @@ class DB:
         with self.lock:
             self.conn.executescript(SCHEMA)
             cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(calls)")}
-            for col in ("filename", "matched_on"):   # databases made before the recording library
+            for col, kind in (("filename", "TEXT NOT NULL DEFAULT ''"), ("matched_on", "TEXT NOT NULL DEFAULT ''"),   # older databases
+                              ("status", "TEXT NOT NULL DEFAULT 'ready'"), ("reviewed", "INTEGER NOT NULL DEFAULT 1"), ("error", "TEXT NOT NULL DEFAULT ''")):
                 if col not in cols:
-                    self.conn.execute(f"ALTER TABLE calls ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
+                    self.conn.execute(f"ALTER TABLE calls ADD COLUMN {col} {kind}")
             self.conn.commit()
 
     def close(self) -> None:
@@ -181,11 +185,11 @@ class DB:
     # -- calls ---------------------------------------------------------------
 
     def add_call(self, actor: str, party: str, call_date: str, transcript: str, origin: str,
-                 audio_sha256: str | None, filename: str = "") -> int:
+                 audio_sha256: str | None, filename: str = "", status: str = "ready", reviewed: bool = True) -> int:
         with self.lock:
             cur = self.conn.execute(
-                "INSERT INTO calls (dispute_id, created_at, actor, party, call_date, transcript, origin, audio_sha256, filename) "
-                "VALUES ('',?,?,?,?,?,?,?,?)", (now_iso(), actor, party, call_date, transcript, origin, audio_sha256, filename))
+                "INSERT INTO calls (dispute_id, created_at, actor, party, call_date, transcript, origin, audio_sha256, filename, status, reviewed) "
+                "VALUES ('',?,?,?,?,?,?,?,?,?,?)", (now_iso(), actor, party, call_date, transcript, origin, audio_sha256, filename, status, int(reviewed)))
             self.conn.commit()
             return cur.lastrowid
 
@@ -203,6 +207,20 @@ class DB:
     def assign_call(self, call_id: int, dispute_id: str, matched_on: str) -> None:
         with self.lock:
             self.conn.execute("UPDATE calls SET dispute_id=?, matched_on=? WHERE id=?", (dispute_id, matched_on, call_id))
+            self.conn.commit()
+
+    def update_call(self, call_id: int, **fields) -> None:
+        allowed = {k: v for k, v in fields.items() if k in ("status", "transcript", "party", "reviewed", "error")}
+        with self.lock:
+            self.conn.execute(f"UPDATE calls SET {', '.join(k + '=?' for k in allowed)} WHERE id=?", (*allowed.values(), call_id))
+            self.conn.commit()
+
+    def fail_interrupted_calls(self) -> None:
+        """Audio is only held in memory, so a restart loses anything still being processed."""
+        with self.lock:
+            self.conn.execute("UPDATE calls SET status='failed', error='The app restarted while reading this call. Add it again.' "
+                              "WHERE status IN ('queued', 'transcribing', 'labelling', 'selecting')")
+            self.conn.execute("UPDATE calls SET status='ready' WHERE status='reading'")
             self.conn.commit()
 
     def delete_call(self, call_id: int) -> None:

@@ -347,9 +347,13 @@ def call_contradicts_claim(reason: str, finding: dict) -> bool:
             and finding["topic"] in CONTRADICTING_TOPICS.get(reason, ()))
 
 
-def call_next_steps(missing: list[str], findings: list[dict]) -> list[str]:
+def call_party(transcript: str) -> str:
+    return "carrier" if re.search(r"(?im)^\s*(carrier|driver|courier)\s*:", transcript) else "buyer"
+
+
+def call_next_steps(missing: list[str], findings: list[dict], needs_check: bool = False) -> list[str]:
     """What the seller should do next, from what the calls said and what is still missing. Plain rules."""
-    steps = []
+    steps = ["Check the transcript and who said what. Quotes join your reply only after you confirm."] if needs_check else []
     if any(f["contradicts"] for f in findings):
         steps.append("Ask the buyer to confirm this in writing in the PayPal case. Their written words carry more weight than a transcript.")
     if missing and any(f["speaker"] == "carrier" for f in findings):

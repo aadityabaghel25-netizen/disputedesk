@@ -15,7 +15,7 @@ Built for the [PayPal AI Hackathon 2026](https://paypalaihackathon.devpost.com).
 1. Open the dashboard. Four sample disputes are already analysed.
 2. Open **PP-D-DEMO-1004**. The buyer's message tells the AI to approve a refund. It's flagged, and the recommendation is still FIGHT.
 3. Open **Proof** and click **Try a fake quote**. Code strikes the invented claim on the spot.
-4. Open **PP-D-DEMO-1003** and read **What your calls say**. The agent selected two sample calls, flagged the buyer's words, and code struck a claim that overstated the driver's.
+4. Open **PP-D-DEMO-1001** and click **Run the AI team again** to watch the agents work live.
 5. Open **Deadlines**, then click **Plan them for me**.
 6. Back on a dispute, click **Approve**. In demo mode the action is only recorded. Then check **Audit log**.
 
@@ -35,9 +35,10 @@ Existing tools often submit automatically and charge a share of what they recove
 - Every claim must cite evidence. Code checks each date, amount, ID and quote against that evidence, then an AI judge reads what survives.
 - Code assembles the final reply from verified claims only.
 
-**Bring in your phone calls**
-- Add call recordings to one library. Gnani turns audio into text, and you check it before it counts.
-- The onboarding agent selects a recording only when it mentions one open case. Otherwise it asks you and doesn't guess.
+**Extra evidence from phone calls (optional)**
+- Drop a recording anywhere in the app. The agents do the rest in the background: Gnani transcribes it, the AI works out who said what, code finds the case, and the team reads it.
+- The onboarding agent selects a case only when the recording mentions one open case. Otherwise it asks you and doesn't guess.
+- Nothing from a call reaches your reply until you click to confirm the transcript.
 - It pulls out exact quotes, says if each helps or may hurt you, flags a buyer who may contradict their own claim, and suggests what to get next.
 - A call shows what someone said. It never replaces a carrier record or changes the recommendation, and statements that may hurt you stay out of the reply but stay on your screen.
 
@@ -130,7 +131,7 @@ Disputes v1 (list, show, provide-evidence, provide-supporting-info, send-message
 ## AI tools used
 
 - **NVIDIA Nemotron 3 Super** (`nvidia/nemotron-3-super-120b-a12b`), served by Nebius Token Factory through an OpenAI-compatible API. It writes summaries and drafts, calls the read-only tool, judges claims, and flags manipulation. It never decides money and can't write to PayPal.
-- **Gnani Vachana speech-to-text** (`prisma-v3.0`, batch API, English by default). Optional. It separates the two speakers, cleans up noise and is told which order numbers to listen for. The result is a draft transcript that the seller checks, and DisputeDesk doesn't keep the audio. A transcript can only be quoted as what someone said. It never replaces carrier proof.
+- **Gnani Vachana speech-to-text** (`prisma-v3.0`, batch API, English by default). Optional. It separates the two speakers, cleans up noise and is told which order numbers to listen for. Nemotron then works out who each speaker is. The seller checks the result, and DisputeDesk doesn't keep the audio. A transcript can only be quoted as what someone said. It never replaces carrier proof.
 - **GLM-5.3** (`zai-org/GLM-5.3`), served by Nebius, powers the Insights dashboard agent through the AG Studio Agent Framework. It reads the dashboard data and builds charts. It has no PayPal access.
 - **Claude Code** (Anthropic) helped write the code, tests and docs, and research the problem.
 
@@ -195,7 +196,7 @@ written by us (the reader's instructions were written after seeing the new attac
 - SQLite storage resets on Render's free plan when the service restarts, and demo data reloads by itself.
 - The Seller Protection checklist and fee maths follow PayPal's published US terms as of October 2026. PayPal alone decides eligibility.
 - We have no measured win rate or time saved yet, so we don't claim either.
-- Recording consent is the seller's own confirmation. Some US states, including California, require everyone on a call to agree, so check the law before real use. There's no live phone line, and Gnani's speech models list Indian languages and Indian English, not US English.
+- Recordings being processed live in memory, so a restart loses them and the app asks you to add them again. Recording consent is the seller's own confirmation, given once. Some US states, including California, require everyone on a call to agree, so check the law before real use. There's no live phone line, and Gnani's speech models list Indian languages and Indian English, not US English.
 - Bryntum Scheduler and AG Studio load from public CDNs as trial builds, with watermarks, and aren't included in this repo. `app/static/studio-adapter.js` is AG Studio's documented example adapter, compiled to JavaScript.
 - Insights in demo mode includes clearly labelled sample history. It has no outcomes, so it implies no win rate.
 

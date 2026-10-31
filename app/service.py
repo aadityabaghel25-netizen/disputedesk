@@ -4,6 +4,7 @@ the human approval step. The web routes in main.py stay thin and call these.
 """
 
 import hashlib
+import queue
 import re
 import threading
 import time
@@ -44,6 +45,10 @@ class Service:
             self.llm = OpenAICompatibleLLM(settings.llm_base_url, settings.llm_api_key, settings.llm_model)
         self.store = store or evidence.Store(settings.store_path)
         self.running: set[str] = set()
+        self.live: dict[str, dict] = {}   # case id -> the agent working on it right now
+        self._call_queue: queue.Queue = queue.Queue()
+        self._call_worker: threading.Thread | None = None
+        self.db.fail_interrupted_calls()
         self._lock = threading.Lock()
         self.last_watch: str | None = None
         self._ai_runs: dict[str, list[float]] = {}
@@ -335,11 +340,17 @@ class Service:
             self._ai_runs[kind] = runs
             return allowed
 
-    def analyze(self, dispute_id: str) -> dict | None:
+    def analyze(self, dispute_id: str, pause: float = 0) -> dict | None:
         with self._lock:
             if dispute_id in self.running:
                 return None
             self.running.add(dispute_id)
+        self.live[dispute_id] = {"agent": "Collector", "what": "Gathering the evidence on this case."}
+
+        def on_step(agent, what):
+            self.live[dispute_id] = {"agent": agent, "what": what}
+            time.sleep(pause)
+
         try:
             dispute = self.db.get_dispute(dispute_id)
             if not dispute:
@@ -347,7 +358,7 @@ class Service:
                 self.db.upsert_dispute(dispute)
             self.select_recordings()
             result, items = agents.analyze(dispute, self.pp, self.store, self.llm, self.settings,
-                                           calls=self.db.list_calls(dispute_id))
+                                           calls=self.db.list_calls(dispute_id), on_step=on_step)
             self.db.replace_evidence(dispute_id, items)
             aid = self.db.save_analysis(dispute_id, result)
             self.db.audit("ai", "analysis", dispute_id, {
@@ -358,12 +369,13 @@ class Service:
             self.db.audit("ai", "analysis_failed", dispute_id, {"error": str(e), "trace": traceback.format_exc()[-1500:]})
             raise
         finally:
+            self.live.pop(dispute_id, None)
             with self._lock:
                 self.running.discard(dispute_id)
 
-    def analyze_quietly(self, dispute_id: str) -> None:
+    def analyze_quietly(self, dispute_id: str, pause: float = 0) -> None:
         try:
-            self.analyze(dispute_id)
+            self.analyze(dispute_id, pause)
         except Exception:
             pass   # already written to the audit log
 
@@ -379,8 +391,6 @@ class Service:
                                           "Seller: Do you remember this parcel?\nDriver: I think I left it at the front door."),
         ("DD-1001-buyer.mp3", "buyer", "Agent: This call is recorded, is that okay?\nBuyer: Yes, go ahead.\n"
                                        "Agent: Have you found the tote?\nBuyer: It never came and my neighbour has not seen it."),
-        ("call-0412.mp3", "buyer", "Agent: This call is recorded, is that okay?\nBuyer: Yes, that's fine.\n"
-                                   "Agent: Which order is this about?\nBuyer: I don't have the number with me right now."),
     )
 
     def _case_references(self, dispute: dict) -> list[tuple[str, str]]:
@@ -401,6 +411,8 @@ class Service:
         cases = [d for d in self.db.list_disputes() if not core.dispute_outcome(d)]
         selected = []
         for call in self.db.list_calls(""):
+            if call["status"] != "ready":
+                continue
             text = f"{call['filename']}\n{call['transcript']}"
             hits = {d["dispute_id"]: label for d in cases if (label := core.find_reference(text, self._case_references(d)))}
             if len(hits) == 1:
@@ -424,23 +436,170 @@ class Service:
             terms += [invoice, ship.get("tracking_number"), shop.get("item"), ship.get("carrier")]
         return list(dict.fromkeys(t for t in terms if t and t != "OTHER"))
 
-    def transcribe_call(self, audio: bytes, filename: str, actor: str) -> tuple[str, str]:
-        """Returns (draft transcript, audio fingerprint). The draft isn't evidence until the seller
-        checks it, labels the speakers and confirms consent. The audio is not kept."""
+    # The background pipeline: a queue and one worker, like a small job runner. Gnani handles one request at a time per
+    # account, so one worker also keeps us inside its limit. Audio stays in memory only until Gnani has it.
+
+    MAX_QUEUED = 5
+    SAMPLE_PAUSE = 1.2      # the demo's sample call would finish instantly; slow it down so people can watch it
+    SAMPLE_LIMIT = 12
+    LIVE_SAMPLE = ("Speaker 1: Thanks for calling about order DD-1002, the leather wallet. This call is recorded, is that okay?\n"
+                   "Speaker 2: Yes, that is fine.\nSpeaker 1: Is the color different from the photos?\n"
+                   "Speaker 2: Honestly, the color looks the same as the photos, I just changed my mind.")
+    CALL_LABELS = {"queued": "Waiting its turn", "transcribing": "Transcribing the audio", "labelling": "Working out who said what",
+                   "selecting": "Finding the matching case", "reading": "AI team is reading it", "failed": "Couldn't read this call"}
+
+    def consent_on_file(self) -> str | None:
+        return self.db.get_rules().get("calls_consent")
+
+    def set_consent(self, given: bool, actor: str) -> None:
+        self.db.set_rule("calls_consent", now_iso() if given else "")
+        self.db.audit(actor, "call_consent_confirmed" if given else "call_consent_withdrawn", None, {})
+
+    def _start_call_worker(self) -> None:
+        if self._call_worker and self._call_worker.is_alive():
+            return
+
+        def loop():
+            while True:
+                call_id, audio, sample = self._call_queue.get()
+                try:
+                    self._process_call(call_id, audio, sample)
+                except Exception as e:   # one bad recording must not stop the worker
+                    self.db.update_call(call_id, status="failed", error=str(e)[:200])
+                    self.db.audit("system", "call_failed", None, {"call_id": call_id, "error": str(e)[:200]})
+                finally:
+                    self._call_queue.task_done()
+
+        self._call_worker = threading.Thread(target=loop, daemon=True, name="call-onboarding")
+        self._call_worker.start()
+
+    def enqueue_recording(self, audio: bytes, filename: str, actor: str, consent: bool = False) -> int:
+        """Accept a recording and return at once. The agents do the rest in the background."""
         if not self.settings.gnani_api_key:
-            raise ActionError("Speech-to-text isn't set up. Paste the transcript instead.")
+            raise ActionError("Audio upload needs a Gnani key.")
         if not audio or len(audio) > self.MAX_AUDIO:
             raise ActionError("Choose an audio file under 10 MB.")
-        if not self.allow_ai_run():
-            raise ActionError("The demo has reached its hourly AI limit. Please try later.")
+        if consent and not self.consent_on_file():
+            self.set_consent(True, actor)
+        if not self.consent_on_file():
+            raise ActionError("Confirm that everyone on your calls agrees to recording.")
+        if self._call_queue.qsize() >= self.MAX_QUEUED or not self.allow_ai_run():
+            raise ActionError("The agents are busy. Try again in a minute.")
+        return self._queue_call(audio, None, filename, "Gnani speech-to-text", actor, hashlib.sha256(audio).hexdigest())
+
+    def enqueue_sample_call(self, actor: str) -> int:
+        """Lets anyone watch the whole pipeline with no keys: a made-up transcript takes Gnani's place."""
+        if not self.demo:
+            raise ActionError("Sample calls are only for the demo.")
+        if sum(c["filename"] == "sample-call.mp3" for c in self.db.all_calls()) >= self.SAMPLE_LIMIT:
+            raise ActionError("That's enough sample calls for now. Remove one on the Calls page.")
+        return self._queue_call(None, self.LIVE_SAMPLE, "sample-call.mp3", "made-up sample for the demo", actor, None)
+
+    def _queue_call(self, audio, sample, filename, origin, actor, fingerprint) -> int:
+        today = datetime.now(timezone.utc).date().isoformat()
+        call_id = self.db.add_call(actor, "buyer", today, "", origin, fingerprint, (filename or "call")[:120], status="queued", reviewed=False)
+        self.db.audit(actor, "call_added", None, {"call_id": call_id, "consent_confirmed": True, "audio_sha256": fingerprint})
+        self._start_call_worker()
+        self._call_queue.put((call_id, audio, sample))
+        return call_id
+
+    def _process_call(self, call_id: int, audio: bytes | None, sample: str | None) -> None:
+        pause = self.SAMPLE_PAUSE if sample else 0
+        call = self.db.get_call(call_id)
+        self.db.update_call(call_id, status="transcribing")
+        time.sleep(pause)
+        if sample:
+            text = sample
+        else:
+            try:
+                text = gnani_transcribe(self.settings.gnani_api_key, self.settings.gnani_model, self.settings.gnani_language,
+                                        audio, call["filename"], keyterms=self._listen_for())
+            except LLMError as e:
+                self.db.update_call(call_id, status="failed", error=str(e)[:200])
+                self.db.audit("system", "call_failed", None, {"call_id": call_id})
+                return
+            self.db.audit("system", "call_transcribed", None, {"call_id": call_id, "provider": "gnani", "model": self.settings.gnani_model})
+        del audio
+        self.db.update_call(call_id, status="labelling", transcript=text)
+        time.sleep(pause)
+        text = agents.label_speakers(text, self.llm)
+        self.db.update_call(call_id, status="selecting", transcript=text, party=core.call_party(text))
+        self.db.audit("ai", "call_labelled", None, {"call_id": call_id})
+        time.sleep(pause)
+        self.db.update_call(call_id, status="ready")
+        selected = self.select_recordings()
+        dispute_id = self.db.get_call(call_id)["dispute_id"]
+        for other in selected:
+            if other != dispute_id:
+                self.refresh_case(other)
+        if dispute_id:
+            self.db.update_call(call_id, status="reading")
+            try:
+                self.refresh_case(dispute_id, pause / 2)
+            finally:
+                self.db.update_call(call_id, status="ready")
+
+    def refresh_case(self, dispute_id: str, pause: float = 0, already_counted: bool = False) -> None:
+        """Re-run the team once a call changes. If it's mid-run, wait, so the new call isn't missed."""
+        for _ in range(150):
+            if dispute_id not in self.running:
+                break
+            time.sleep(2)
+        if already_counted or self.allow_ai_run():
+            self.analyze_quietly(dispute_id, pause)
+
+    def confirm_call(self, call_id: int, transcript: str, actor: str) -> str:
+        """The seller's one click. Only now can quotes from this call reach the reply."""
+        call = self.db.get_call(call_id)
+        if not call or call["status"] != "ready":
+            raise ActionError("That recording isn't ready yet.")
+        transcript = (transcript or call["transcript"]).replace("\r\n", "\n").strip()
         try:
-            text = gnani_transcribe(self.settings.gnani_api_key, self.settings.gnani_model, self.settings.gnani_language, audio, filename,
-                                    keyterms=self._listen_for())
-        except LLMError as e:
+            core.parse_call_turns(transcript)
+        except ValueError as e:
             raise ActionError(str(e)) from None
-        fingerprint = hashlib.sha256(audio).hexdigest()
-        self.db.audit(actor, "call_transcribed", None, {"provider": "gnani", "model": self.settings.gnani_model, "audio_sha256": fingerprint})
-        return text, fingerprint
+        self.db.update_call(call_id, transcript=transcript, party=core.call_party(transcript), reviewed=1)
+        self.db.audit(actor, "call_confirmed", call["dispute_id"] or None, {"call_id": call_id, "sha256": hashlib.sha256(transcript.encode()).hexdigest()})
+        self.select_recordings()
+        return self.db.get_call(call_id)["dispute_id"]
+
+    def live_state(self) -> dict:
+        """Everything the live agent panel shows. Reads only, and no call or buyer words: just names and progress."""
+        calls, needs = self.db.all_calls(), []
+        active = [c for c in calls if c["status"] in ("queued", "transcribing", "labelling", "selecting", "reading")]
+        for c in calls:
+            name = c["filename"] or "A pasted call"
+            if c["status"] == "failed":
+                needs.append({"kind": "failed", "title": f"Couldn't read {name}", "detail": c["error"], "href": "/recordings#attention"})
+            elif c["status"] == "ready" and not c["dispute_id"]:
+                needs.append({"kind": "case", "title": f"Choose a case for {name}", "detail": "It doesn't mention one open case.", "href": "/recordings#attention"})
+            elif c["status"] == "ready" and not c["reviewed"]:
+                needs.append({"kind": "check", "title": f"Check {name}", "detail": f"Quotes for {c['dispute_id']} are waiting for one click.", "href": f"/disputes/{c['dispute_id']}#calls"})
+        for d in self.db.list_disputes():
+            a = self.db.latest_analysis(d["dispute_id"])
+            if a and core.allowed_actions(d) and not core.seller_submissions(d) and not core.dispute_outcome(d):
+                due = core.deadline_info(d)
+                days = f"{due['hours_left'] / 24:.1f} days left" if due["due"] and due["hours_left"] >= 0 else "Overdue" if due["due"] else "No deadline"
+                needs.append({"kind": "approve", "title": f"Approve the reply on {d['dispute_id']}",
+                              "detail": f"The team says {a['advice']['decision'].upper()}. {days}.", "href": f"/disputes/{d['dispute_id']}", "hours": due["hours_left"]})
+        rank = {"approve": 0, "failed": 1, "check": 2, "case": 3}
+        needs.sort(key=lambda n: (rank[n["kind"]], n.get("hours") if n.get("hours") is not None else 1e9))
+        running = [{"dispute_id": k, **v} for k, v in list(self.live.items())]
+        first_call = active[-1] if active else None
+        team = f"{running[0]['agent']} on {running[0]['dispute_id']}" if running else "Waiting for the next case"
+        roster = [
+            {"name": "PayPal watcher", "state": "idle" if self.demo else "watching",
+             "detail": "Paused in demo mode" if self.demo else f"Checks PayPal every {self.settings.watch_minutes} min"},
+            {"name": "Case team", "state": "working" if running else "idle", "detail": team},
+            {"name": "Verifier", "state": "working" if any(r["agent"] == "Verifier" for r in running) else "idle", "detail": "Strikes any claim without proof"},
+            {"name": "Tracking", "state": "idle" if self.demo else "watching", "detail": "Paused in demo mode" if self.demo else "Adds tracking when a payment arrives"},
+            {"name": "Call onboarding", "state": "working" if active else "idle",
+             "detail": self.CALL_LABELS[first_call["status"]] if first_call else "Waiting for a recording"},
+        ]
+        return {"calls": [{"id": c["id"], "filename": c["filename"] or "A pasted call", "status": c["status"], "label": self.CALL_LABELS[c["status"]],
+                           "dispute_id": c["dispute_id"]} for c in active],
+                "running": running, "needs": needs, "agents": roster,
+                "upload": bool(self.settings.gnani_api_key), "consent": bool(self.consent_on_file()), "demo": self.demo}
 
     def add_call(self, form: dict, actor: str, origin: str | None = None) -> list[str]:
         """Save a checked recording to the library, then let code select its case. Returns the case ids it selected."""
@@ -478,8 +637,9 @@ class Service:
         return list(dict.fromkeys(selected))
 
     def assign_recording(self, call_id: int, dispute_id: str, actor: str) -> None:
-        if not self.db.get_call(call_id) or not self.db.get_dispute(dispute_id):
-            raise ActionError("That recording or case no longer exists.")
+        call = self.db.get_call(call_id)
+        if not call or call["status"] != "ready" or not self.db.get_dispute(dispute_id):
+            raise ActionError("That recording or case isn't available.")
         self.db.assign_call(call_id, dispute_id, "your choice")
         self.db.audit(actor, "call_selected", dispute_id, {"call_id": call_id, "matched_on": "seller"})
 

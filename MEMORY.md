@@ -205,6 +205,7 @@ Fallback if evidence submission fails in sandbox: use `send-message` + `make-off
 | 2026-10-24 | Chose DisputeDesk over GigShield / MilestoneLock / Haggle (least crowded, deepest PayPal use, banking-domain fit, no Payouts dependency) |
 | 2026-10-25 | Merged best features of winners into DisputeDesk (Prevent / Defend / Settle) |
 | 2026-10-25 | Python, not TypeScript (Ankit's comfort); REST for gaps in Python toolkit |
+| 2026-11-01 | App redesigned as agent command center around the dispute flow. Calls are a side source of evidence, so keep them out of the main pitch and judge path. Drop a call anywhere, background worker queue, live rail. AI labels speakers, so quotes stay out of the reply until the seller's one-click confirm. Recording consent is confirmed once and can be withdrawn under Guardrails |
 | 2026-10-31 | Onboarding agent added for call recordings (Gnani batch speech-to-text). Code selects a recording only when it mentions one open case; AI picks quotes and says helps/hurts; code keeps exact quotes from the other person only. A call shows what was said: consent required, seller reviews it, it never meets a PayPal requirement and doesn't change fight/settle. No voice approval or live phone line |
 | 2026-10-25 | AI provider kept swappable; start on NVIDIA Nemotron free key |
 | 2026-10-25 | **Not entering the Nebius x NVIDIA hackathon**. PayPal only |

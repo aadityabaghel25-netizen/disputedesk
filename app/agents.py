@@ -4,6 +4,7 @@ The agent team. Each "agent" is one focused AI job with its own instructions:
   1. Triage        (AI)    - explain the buyer's complaint in plain words
   2. Collector     (code)  - gather every provable fact -> evidence E1, E2, ...
      Onboarding    (AI + code) - reads the case's call recordings; code checks every quote it picks
+     Labeller      (AI)    - before that, works out who Speaker 1 and Speaker 2 are; the seller confirms it
   3. Investigator  (AI + read-only tools) - decides if extra checks are needed
   4. Rule checker  (code)  - looks up PayPal's rules for this reason (retrieval)
   5. Drafter       (AI)    - writes claims, each pointing at evidence ids
@@ -73,6 +74,11 @@ class CallFindings(BaseModel):
     findings: list[CallFinding]
 
 
+class SpeakerRoles(BaseModel):
+    speaker_1: Literal["Agent", "Seller", "Buyer", "Driver"]
+    speaker_2: Literal["Agent", "Seller", "Buyer", "Driver"]
+
+
 class SettleNote(BaseModel):
     message: str = Field(description="Two friendly sentences to the buyer. Do NOT mention any amount or number.")
 
@@ -88,15 +94,36 @@ def _evidence_for_prompt(items: list[dict]) -> str:
 MAX_FINDINGS_PER_CALL = 5
 
 
+def label_speakers(transcript: str, llm) -> str:
+    """Speech-to-text says "Speaker 1". The AI works out who that is from the conversation. It's a best guess, so
+    quotes stay out of the reply until the seller confirms. If the AI can't tell, the labels stay for the seller to fix."""
+    if not re.search(r"(?im)^Speaker 1\s*:", transcript):
+        return transcript
+    try:
+        roles = ask_json(llm, "[agent:labeller] This is a phone call about an online order. Agent or Seller means the shop's side. "
+                              "Buyer means the customer. Driver means the delivery person. Decide who each speaker is. " + UNTRUSTED_NOTE,
+                         f"CALL_TEXT:{transcript}END_CALL", SpeakerRoles)
+    except LLMError:
+        return transcript
+    if roles.speaker_1 == roles.speaker_2:
+        return transcript
+    text = re.sub(r"(?im)^Speaker 1\s*:", f"{roles.speaker_1}:", transcript)
+    return re.sub(r"(?im)^Speaker 2\s*:", f"{roles.speaker_2}:", text)
+
+
 def onboard_calls(calls: list[dict], reason: str, llm, items: list[dict], warnings: list[str]) -> list[dict]:
     """The onboarding agent. The AI points at the words that matter, and code keeps only exact quotes from the
     other person. Statements that hurt the seller are shown to the seller, but not offered to the Drafter."""
     review = []
     for call in calls:
         entry = {"call_id": call["id"], "party": call["party"], "call_date": call["call_date"], "filename": call.get("filename", ""),
-                 "matched_on": call.get("matched_on", ""), "flagged": False, "findings": [], "dropped": 0}
+                 "matched_on": call.get("matched_on", ""), "flagged": False, "findings": [], "dropped": 0,
+                 "needs_check": not call.get("reviewed", 1)}
         review.append(entry)
-        turns = core.parse_call_turns(call["transcript"])
+        try:
+            turns = core.parse_call_turns(call["transcript"])
+        except ValueError:   # speakers aren't labelled yet: the seller fixes that on the case page
+            continue
         if any(core.injection_flags(t["text"]) for t in turns if t["speaker"] != "staff"):
             entry["flagged"] = True
             if evidence.INJECTION_WARNING not in warnings:
@@ -123,19 +150,22 @@ def onboard_calls(calls: list[dict], reason: str, llm, items: list[dict], warnin
             seen.add(f.quote)
             finding = {"quote": f.quote, "speaker": turn["speaker"], "topic": f.topic, "stance": f.stance, "evidence_id": None}
             finding["contradicts"] = core.call_contradicts_claim(reason, finding)
-            if f.stance != "hurts":
+            if f.stance != "hurts" and not entry["needs_check"]:   # no quote reaches the Drafter before the seller confirms
                 finding["evidence_id"] = evidence.add_call_finding(items, call, turn, f.quote, f.topic, f.stance)
             entry["findings"].append(finding)
     return review
 
 
-def analyze(dispute: dict, pp, store: evidence.Store, llm, settings, calls: list[dict] | None = None) -> tuple[dict, list[dict]]:
+def analyze(dispute: dict, pp, store: evidence.Store, llm, settings, calls: list[dict] | None = None,
+            on_step=None) -> tuple[dict, list[dict]]:
     """Run the whole team on one dispute. Returns (analysis_result, evidence_items)."""
     t0 = time.time()
     steps: list[dict] = []
 
     def step(agent, kind, what):
         steps.append({"agent": agent, "kind": kind, "what": what})
+        if on_step:
+            on_step(agent, what)
 
     reason = dispute.get("reason", "OTHER")
     deadline = core.deadline_info(dispute)
@@ -203,7 +233,7 @@ def analyze(dispute: dict, pp, store: evidence.Store, llm, settings, calls: list
     # 4. Rule checker (code)
     policy = core.retrieve_policy(reason)
     met, missing = evidence.check_requirements(reason, items)
-    step("Rule checker", "code", f"PayPal expects for {reason}: {len(met)} met, {len(missing)} missing.")
+    step("Rule checker", "code", f"Checked what PayPal expects for this claim: {len(met)} met, {len(missing)} missing.")
 
     # 5. Drafter (AI)
     try:
@@ -287,7 +317,7 @@ def analyze(dispute: dict, pp, store: evidence.Store, llm, settings, calls: list
         "money": money,
         "settle_note": settle_note,
         "call_review": call_review,
-        "call_next_steps": core.call_next_steps(missing, call_findings),
+        "call_next_steps": core.call_next_steps(missing, call_findings, any(c["needs_check"] for c in call_review)),
         "warnings": warnings,
         "steps": steps,
         "model": getattr(llm, "model", None) or llm.name,

@@ -1,5 +1,6 @@
 {% extends "base.html" %}
-{% block head %}{% if rows | selectattr("running") | list %}<meta http-equiv="refresh" content="4">{% endif %}{% endblock %}
+{% block title %}Command center · DisputeDesk{% endblock %}
+{% block head %}{% if rows | selectattr("running") | list %}<noscript><meta http-equiv="refresh" content="4"></noscript>{% endif %}{% endblock %}
 {% block content %}
 {% if no_password %}<div class="banner err">This dashboard is public. Set ADMIN_PASSWORD in Render's environment settings.</div>{% endif %}
 
@@ -8,15 +9,34 @@
 
 <div class="page-head">
   <div>
-    <h1>Your disputes</h1>
-    <div class="sub">{% if stats.ready %}<b>{{ stats.ready }} {{ 'case is' if stats.ready == 1 else 'cases are' }} ready for your approval.</b> Soonest deadline first.{% else %}Nothing needs you right now. Soonest deadline first.{% endif %}</div>
+    <h1>Command center</h1>
+    <div class="sub">Your agents watch PayPal and build each case with proof behind every sentence. They stop at the point where a decision is yours.</div>
   </div>
   <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
     <a class="btn secondary" href="/deadlines.ics" title="Add every reply deadline to your calendar">Add to calendar</a>
-    <form method="post" action="/sync"><button>
+    <form method="post" action="/sync"><button class="secondary">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg>
       Check PayPal now</button></form>
   </div>
+</div>
+
+<div class="card pipeline-card">
+  <div class="card-head"><h3>Live agent run</h3><span class="small muted">AI reads and drafts. Code decides money.</span></div>
+  <ol class="pipeline" aria-label="How a case moves through the agents">
+    <li data-step="watch"><span class="node" aria-hidden="true">1</span>Watch<small>New PayPal cases</small></li>
+    <li data-step="collect"><span class="node" aria-hidden="true">2</span>Collect<small>Every provable fact</small></li>
+    <li data-step="investigate"><span class="node" aria-hidden="true">3</span>Investigate<small>Rules and risk</small></li>
+    <li data-step="draft"><span class="node" aria-hidden="true">4</span>Draft<small>Cited claims</small></li>
+    <li data-step="verify"><span class="node" aria-hidden="true">5</span>Verify<small>Strikes the unproven</small></li>
+    <li data-step="advise"><span class="node" aria-hidden="true">6</span>Advise<small>Code, in cents</small></li>
+    <li class="you"><span class="node" aria-hidden="true">✓</span>You approve<small>Only you can send</small></li>
+  </ol>
+  <div class="live-line" id="live-line" aria-live="polite"><span class="pulse idle"></span><span>Connecting to agents…</span></div>
+</div>
+
+<div class="card">
+  <div class="card-head"><h3>Needs you</h3><span class="small muted">Soonest deadline first</span></div>
+  <div id="command-needs"><div class="all-clear">Checking…</div></div>
 </div>
 
 <div class="stats">
@@ -41,7 +61,7 @@
     <button type="button" class="secondary chip" data-filter="done" aria-pressed="false">Closed ({{ rows | selectattr('next.state', 'equalto', 'done') | list | length }})</button>
   </div>
   <div class="table-wrap"><table>
-    <tr><th>Dispute</th><th class="num">Amount</th><th>Reply by</th><th>AI recommendation</th><th>Next step</th></tr>
+    <tr><th>Dispute</th><th class="num">Amount</th><th>Reply by</th><th>Team's call</th><th>Next step</th></tr>
     {% for r in rows %}
     {% set dec = r.a.advice.decision if r.a else None %}
     {% set risk = (r.a.buyer_risk or {}).level if r.a else None %}
@@ -59,7 +79,7 @@
         {% else %}<span class="muted">None</span>{% endif %}
       </td>
       <td>
-        {% if r.running %}<span class="badge b-ai">AI team working…</span>
+        {% if r.running %}<span class="badge b-ai"><span class="pulse working"></span>AI team working…</span>
         {% elif r.a %}
           <span class="badge {{ 'b-ok' if dec == 'fight' else 'b-warn' if dec == 'settle' else 'b-bad' }}">{{ dec | upper }}</span>
           {% if risk == 'high' %}<span class="badge b-bad">Serial disputer</span>{% endif %}
