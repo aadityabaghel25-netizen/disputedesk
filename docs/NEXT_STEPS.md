@@ -4,8 +4,8 @@ Status as of 2026-11-01. Tick items off and move them to MEMORY.md "Status".
 
 ## Do these first (only Ankit can)
 1. Done: the public demo is https://disputedesk-tfej.onrender.com (auto-deploys from `main`, checked Nov 1). `disputedesk.onrender.com` is not ours. Check the `Environment` tab: `GNANI_API_KEY` and the PayPal keys stay empty.
-2. Rotate the Gnani key, since it was pasted in chat. Keep `GNANI_API_KEY` empty on the public demo.
-3. Real sandbox test: load a dispute, add a PDF under Close the proof gap, and click Approve when PayPal asks for evidence. This is the first real test of file attachments.
+2. Gnani key: Ankit chose on Nov 1 to keep the current key, though it was pasted in chat. Keep `GNANI_API_KEY` empty on the public demo. Rotate it if the credit drops unexpectedly (`python3 scripts/setup.py gnani` checks a key).
+3. Done Nov 1: a PDF filed on PP-R-NKX-10195211 appears on PayPal's sandbox record under `evidences[].documents`.
 4. Run `python3 scripts/setup.py decide <CASE_ID> seller` to film the won ending.
 5. Time one manual reply against DisputeDesk for a real number, then record the video.
 6. Submit on Devpost by Nov 5 for early review (text and script: `reports/Submission kit.md`).
@@ -53,6 +53,6 @@ Status as of 2026-11-01. Tick items off and move them to MEMORY.md "Status".
 - Photo evidence via vision model; serial-disputer flag; Postgres.
 
 ## Call onboarding agent (built, tested live with a made-up call)
-- [ ] Rotate the Gnani key (it was pasted in chat), then decide whether the public demo gets one: visitors could spend its credit.
+- [x] Public demo gets no Gnani key, because visitors could spend its credit. Key not rotated, by Ankit's choice.
 - [ ] Try one real phone recording: so far only computer voices are tested.
 - [ ] Live phone line (Twilio or similar): not built.

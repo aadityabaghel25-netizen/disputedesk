@@ -45,6 +45,7 @@ python3 spike/test_llm.py models                # list models for the configured
 python3 scripts/setup.py order DD-1004          # sandbox order -> approve as buyer -> ship
 python3 scripts/setup.py ship <ORDER_ID> DD-1004
 python3 scripts/setup.py webhook https://<public-url>   # register webhook, prints PAYPAL_WEBHOOK_ID
+python3 scripts/setup.py gnani                  # check the Gnani key in .env (free)
 ```
 If port 8000 is busy: `lsof -ti:8000 | xargs kill`.
 

@@ -17,6 +17,9 @@ One-time setup helpers for the real PayPal sandbox.
 
   python3 scripts/setup.py decide PP-R-XXX seller|buyer
       Sandbox only. Plays PayPal's reviewer and closes the case, to show the ending of the flow.
+
+  python3 scripts/setup.py gnani
+      Checks that Gnani accepts the key in .env. Costs nothing: it only lists your jobs.
 """
 
 import json
@@ -25,14 +28,30 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.config import get_settings  # noqa: E402
+from app.llm import GNANI_JOBS, LLMError, _gnani_json  # noqa: E402
 from app.paypal import PayPal, PayPalError  # noqa: E402
 
 EVENTS = ["CUSTOMER.DISPUTE.CREATED", "CUSTOMER.DISPUTE.UPDATED", "CUSTOMER.DISPUTE.RESOLVED",
           "PAYMENT.CAPTURE.COMPLETED"]
 
 
+def check_gnani(api_key: str) -> int:
+    if not api_key:
+        print("[FAILED] GNANI_API_KEY is empty in .env.")
+        return 1
+    try:
+        _gnani_json(GNANI_JOBS, api_key)
+    except (LLMError, OSError) as e:
+        print(f"[FAILED] {e}")
+        return 1
+    print("[OK] Gnani accepts this key.")
+    return 0
+
+
 def main() -> int:
     s = get_settings()
+    if sys.argv[1:2] == ["gnani"]:
+        return check_gnani(s.gnani_api_key)
     pp = PayPal(s.paypal_client_id, s.paypal_client_secret, s.paypal_base_url)
     if not pp.configured:
         print("Set PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET in .env first.")

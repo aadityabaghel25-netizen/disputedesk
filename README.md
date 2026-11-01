@@ -200,7 +200,7 @@ written by us (the reader's instructions were written after seeing the new attac
 
 - The recommendation score mostly tests our rules: the decision is computed by code, on test cases we wrote ourselves.
 - PayPal's sandbox refused `PROOF_OF_FULFILLMENT` even though it listed it as requested, so one click tries the next truthful evidence type. PayPal stored our filing as `OTHER`.
-- File attachments use the `evidence-file` part from PayPal's API spec and haven't been tried on a real sandbox dispute yet. PayPal's spec doesn't give file limits, so we accept common types under 10 MB. At the reviewer stage, files are listed in the reply but not attached.
+- File attachments use the `evidence-file` part from PayPal's API spec. A PDF filed from the app appears on PayPal's own record of a real sandbox dispute. PayPal's spec doesn't give file limits, so we accept common types under 10 MB. At the reviewer stage, files are listed in the reply but not attached.
 - The AI doesn't read files you add. It sees the details you typed, and code checks them. The app can't confirm a record with the carrier.
 - The sandbox gives a reply path only after a dispute escalates, and `require-evidence` is a sandbox-only switch. Live behaviour may differ.
 
