@@ -24,7 +24,12 @@ class DemoPayPal:
     is_demo = True
 
     def __init__(self, path: str = DEMO_FILE):
-        with open(path, encoding="utf-8") as f:
+        self._path = path
+        self.reset()
+
+    def reset(self) -> None:
+        """Back to the sample cases as they start, with deadlines counted from today."""
+        with open(self._path, encoding="utf-8") as f:
             data = json.load(f)
         self._disputes = {d["dispute_id"]: d for d in data["disputes"]}
         self._keep_dates_current()

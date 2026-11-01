@@ -62,6 +62,8 @@ class Settings:
     allow_unverified_webhooks: bool
     # Re-check open disputes with PayPal every N minutes (0 = off). Catches changes even without webhooks.
     watch_minutes: int = 5
+    # Demo mode only: put the sample cases back this many minutes after a visitor's last change (0 = off).
+    demo_reset_minutes: int = 30
     # Protects the AI key on a public demo. 0 = no limit.
     ai_runs_per_hour: int = 30
     agent_turns_per_hour: int = 200   # dashboard agent; one question can take several turns
@@ -94,6 +96,7 @@ def get_settings() -> Settings:
         admin_password=e("ADMIN_PASSWORD", ""),
         allow_unverified_webhooks=e("ALLOW_UNVERIFIED_WEBHOOKS", "false").lower() == "true",
         watch_minutes=int(e("WATCH_MINUTES", "5")),
+        demo_reset_minutes=int(e("DEMO_RESET_MINUTES", "30")),
         ai_runs_per_hour=int(e("AI_RUNS_PER_HOUR", "30")),
         agent_turns_per_hour=int(e("AGENT_TURNS_PER_HOUR", "200")),
         agent_model=e("AGENT_MODEL", ""),

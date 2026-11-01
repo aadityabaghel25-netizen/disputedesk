@@ -54,6 +54,7 @@ class Service:
         self._lock = threading.Lock()
         self.last_watch: str | None = None
         self._ai_runs: dict[str, list[float]] = {}
+        self._rule_defaults = (settings.settle_max_usd, settings.max_offer_pct)
         self._apply_rules(self.db.get_rules())
 
     # -- seller rules (edited in the UI, enforced by code) ----------------------
@@ -219,6 +220,46 @@ class Service:
         if first_visit:
             for u in self.board_data()["unplanned"][:-1]:
                 self.autoplan("system", only=u["dispute_id"])
+
+    DEMO_DEADLINE_HOURS = 12   # refresh the sample cases before a deadline gets this close
+
+    def demo_reset_due(self, now: datetime | None = None) -> bool:
+        """Did a visitor leave changes behind, or is a sample deadline close? Never interrupts someone still working."""
+        minutes = self.settings.demo_reset_minutes
+        disputes = self.db.list_disputes()
+        if not self.demo or minutes <= 0 or not disputes or self.running or self.live_state()["calls"]:
+            return False
+        now = now or datetime.now(timezone.utc)
+        changed = self.db.last_visitor_change()
+        if changed:
+            return now - core.parse_time(changed) >= timedelta(minutes=minutes)
+        return any(core.parse_time(d["seller_response_due_date"]) - now < timedelta(hours=self.DEMO_DEADLINE_HOURS)
+                   for d in disputes if d.get("seller_response_due_date"))
+
+    def reset_demo(self) -> None:
+        """Back to what a first-time visitor should see, so one visitor's clicks don't change the next visitor's demo."""
+        if not self.demo:
+            return
+        self.db.clear_case_data()
+        self.pp.reset()
+        self.settings.settle_max_usd, self.settings.max_offer_pct = self._rule_defaults
+        self.db.audit("system", "demo_reset", None, {})
+        self.seed_demo()
+
+    def start_demo_keeper(self) -> None:
+        if not self.demo or self.settings.demo_reset_minutes <= 0:
+            return
+
+        def loop():
+            while True:
+                time.sleep(300)
+                try:
+                    if self.demo_reset_due():
+                        self.reset_demo()
+                except Exception as e:   # the demo must keep serving; log and carry on
+                    self.db.audit("system", "demo_reset_failed", None, {"error": str(e)[:300]})
+
+        threading.Thread(target=loop, daemon=True, name="demo-keeper").start()
 
     def start_watcher(self) -> None:
         minutes = self.settings.watch_minutes

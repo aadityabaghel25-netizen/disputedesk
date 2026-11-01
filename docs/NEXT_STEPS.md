@@ -1,9 +1,9 @@
 # Next steps (priority order)
 
-Status as of 2026-11-02. Tick items off and move them to MEMORY.md "Status".
+Status as of 2026-11-01. Tick items off and move them to MEMORY.md "Status".
 
 ## Do these first (only Ankit can)
-1. Check the Render deploy and get the public link. `disputedesk.onrender.com` answered 503 on Nov 2, so the service may have another name or not be running.
+1. Done: the public demo is https://disputedesk-tfej.onrender.com (auto-deploys from `main`, checked Nov 1). `disputedesk.onrender.com` is not ours. Check the `Environment` tab: `GNANI_API_KEY` and the PayPal keys stay empty.
 2. Rotate the Gnani key, since it was pasted in chat. Keep `GNANI_API_KEY` empty on the public demo.
 3. Real sandbox test: load a dispute, add a PDF under Close the proof gap, and click Approve when PayPal asks for evidence. This is the first real test of file attachments.
 4. Run `python3 scripts/setup.py decide <CASE_ID> seller` to film the won ending.

@@ -7,10 +7,12 @@ Built for the [PayPal AI Hackathon 2026](https://paypalaihackathon.devpost.com).
 | | |
 |---|---|
 | **Demo video** | _link added at submission_ |
-| **Live demo** | _link added at submission_ (demo mode: no login, nothing is sent to PayPal) |
+| **Live demo** | https://disputedesk-tfej.onrender.com (demo mode: no login, nothing is sent to PayPal) |
 | **Built with** | PayPal Disputes, Orders, Payments and Webhooks APIs (sandbox) · NVIDIA Nemotron 3 Super · Gnani speech-to-text · Bryntum Scheduler · AG Studio · Render · Python, Starlette, SQLite |
 
 ## See it in 60 seconds
+
+The live demo is shared. It goes back to this starting point 30 minutes after the last change, and its deadlines stay current.
 
 1. Open the dashboard. Four sample disputes are already analysed.
 2. Open **PP-D-DEMO-1004**. The buyer's message tells the AI to approve a refund. It's flagged, and the recommendation is still FIGHT.

@@ -344,6 +344,20 @@ class DB:
                 (ts, actor, action, dispute_id, json.dumps(details), prev, h))
             self.conn.commit()
 
+    def last_visitor_change(self) -> str | None:
+        """When someone last changed the demo since its last reset. The app's own work and downloads don't count."""
+        row = self._one("SELECT ts FROM audit WHERE id > COALESCE((SELECT MAX(id) FROM audit WHERE action='demo_reset'), 0) "
+                        "AND actor NOT IN ('system', 'ai', 'paypal', 'demo') AND action != 'download_pack' "
+                        "ORDER BY id DESC LIMIT 1")
+        return row["ts"] if row else None
+
+    def clear_case_data(self) -> None:
+        """For the demo reset. The audit log stays, because it's append-only."""
+        with self.lock:
+            for table in ("events", "disputes", "evidence", "analyses", "blocks", "rules", "documents", "calls"):
+                self.conn.execute(f"DELETE FROM {table}")
+            self.conn.commit()
+
     def audit_log(self, dispute_id: str | None = None, limit: int = 100) -> list[dict]:
         if dispute_id:
             rows = self._all("SELECT * FROM audit WHERE dispute_id=? ORDER BY id DESC LIMIT ?", (dispute_id, limit))

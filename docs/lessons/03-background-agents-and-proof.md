@@ -41,3 +41,9 @@ Three checks run with no AI at all:
 Changing a prompt is like changing code with no compiler. The only way to know what it did is to run your evaluation again: `scripts/eval.py` and `scripts/attack_eval.py`. Use the real model, because the offline brain is scripted and can't catch a real model's behaviour.
 
 That happened here: the offline brain tagged the buyer's words as `receipt`, so the contradiction flag worked. The real model tagged them `delivery`, and the flag didn't fire. Only the real-model run showed it.
+
+## 6. A shared demo needs to clean up after itself (`Service.reset_demo`)
+
+The live demo has no login, so everyone shares one database. One judge's clicks would change what the next judge sees, and sample deadlines would run out while the site sat waiting. So a background job puts the sample cases back 30 minutes after the last change, or when a deadline gets close. It waits while anyone is still working, and it never runs against a real PayPal account.
+
+**DevOps analogy:** an ephemeral environment rebuilt from a golden image, instead of a long-lived server that drifts. Each rebuild has a cost, because it re-runs the AI, so it only happens when something actually needs it.

@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 import urllib.error
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 os.environ["DISPUTEDESK_NO_AUTOAPP"] = "1"
@@ -37,6 +38,105 @@ def settings(**over):
     for k, v in over.items():
         setattr(s, k, v)
     return s
+
+
+class DemoResetTests(unittest.TestCase):
+    def _demo(self, **over):
+        s = Service(settings(**over), db=DB(":memory:"), pp=DemoPayPal(), llm=FakeLLM())
+        s.seed_demo()
+        return s
+
+    def _soon(self, minutes=31):
+        return datetime.now(timezone.utc) + timedelta(minutes=minutes)
+
+    def test_untouched_demo_is_left_alone(self):
+        self.assertFalse(self._demo().demo_reset_due(self._soon()))
+
+    def test_visitor_changes_go_away_once_they_stop(self):
+        s = self._demo()
+        before = s.settings.settle_max_usd
+        self.assertEqual(s.db.latest_analysis("PP-D-DEMO-1003")["advice"]["decision"], "settle")
+        s.add_sample_document("PP-D-DEMO-1003", "seller")
+        s.analyze("PP-D-DEMO-1003")
+        s.update_rules({"settle_max_usd": "1", "max_offer_pct": "10"}, "seller")
+        s.pp.provide_evidence("PP-D-DEMO-1001", [{"notes": "filed"}])
+        s.db.upsert_dispute(s.pp.get_dispute("PP-D-DEMO-1001"))
+        self.assertFalse(s.demo_reset_due(self._soon(5)))     # still here
+        self.assertTrue(s.demo_reset_due(self._soon()))
+        s.reset_demo()
+        result = s.db.latest_analysis("PP-D-DEMO-1003")
+        self.assertEqual(result["advice"]["decision"], "settle")
+        self.assertNotIn("changed_from", result)
+        self.assertEqual(s.db.list_documents("PP-D-DEMO-1003"), [])
+        self.assertEqual(s.settings.settle_max_usd, before)
+        self.assertEqual(s.pp.sent, [])
+        self.assertEqual(s.db.get_dispute("PP-D-DEMO-1001")["status"], DemoPayPal().get_dispute("PP-D-DEMO-1001")["status"])
+        self.assertEqual(len(s.db.all_calls()), len(s.SAMPLE_RECORDINGS))
+        self.assertEqual(len(s.board_data()["unplanned"]), 1)
+        self.assertFalse(s.demo_reset_due(self._soon()))      # no reset loop, so no AI spend
+        self.assertTrue(s.db.verify_audit_chain()[0])
+
+    def test_nearly_overdue_samples_refresh(self):
+        s = self._demo()
+        dispute = s.db.get_dispute("PP-D-DEMO-1003")
+        dispute["seller_response_due_date"] = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat().replace("+00:00", "Z")
+        s.db.upsert_dispute(dispute)
+        self.assertTrue(s.demo_reset_due())
+        s.reset_demo()
+        self.assertFalse(s.demo_reset_due())
+        self.assertNotEqual(core.deadline_info(s.db.get_dispute("PP-D-DEMO-1003"))["urgency"], "overdue")
+
+    def test_demo_still_works_weeks_later(self):
+        """Run the judge path with the clock 60 days ahead, the way the hosted demo will live through judging."""
+        import app.agents, app.core, app.demo, app.evidence, app.service
+        real = datetime
+
+        class Later(real):
+            @classmethod
+            def now(cls, tz=None):
+                return real.now(tz) + timedelta(days=60)
+
+        s = self._demo()
+        patches = [mock.patch.object(m, "datetime", Later) for m in (app.agents, app.core, app.demo, app.evidence, app.service)
+                   if hasattr(m, "datetime")]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.assertTrue(s.demo_reset_due())
+        s.reset_demo()
+        self.assertFalse(s.demo_reset_due())
+        days = core.parse_time(s.db.get_dispute("PP-D-DEMO-1003")["seller_response_due_date"]) - Later.now(timezone.utc)
+        self.assertGreater(days, timedelta(hours=12))
+        self.assertEqual(s.db.latest_analysis("PP-D-DEMO-1003")["advice"]["decision"], "settle")
+        s.add_sample_document("PP-D-DEMO-1003", "seller")
+        result = s.analyze("PP-D-DEMO-1003")
+        self.assertEqual(result["advice"]["decision"], "fight")
+        self.assertEqual(result["changed_from"], "settle")
+
+    def test_waits_while_agents_are_working(self):
+        s = self._demo()
+        s.add_sample_document("PP-D-DEMO-1003", "seller")
+        s.running.add("PP-D-DEMO-1003")
+        self.assertFalse(s.demo_reset_due(self._soon()))
+
+    def test_downloads_do_not_trigger_a_reset(self):
+        s = self._demo()
+        s.db.audit("seller", "download_pack", "PP-D-DEMO-1001", {})
+        self.assertFalse(s.demo_reset_due(self._soon()))
+
+    def test_can_be_switched_off(self):
+        s = self._demo(demo_reset_minutes=0)
+        s.add_sample_document("PP-D-DEMO-1003", "seller")
+        self.assertFalse(s.demo_reset_due(self._soon()))
+
+    def test_never_touches_a_real_paypal_account(self):
+        pp = mock.Mock(is_demo=False, configured=True)
+        s = Service(settings(), db=DB(":memory:"), pp=pp, llm=FakeLLM())
+        s.db.upsert_dispute(DemoPayPal().get_dispute("PP-D-DEMO-1003"))
+        s.db.audit("seller", "load_dispute", "PP-D-DEMO-1003", {})
+        self.assertFalse(s.demo_reset_due(self._soon()))
+        s.reset_demo()
+        self.assertTrue(s.db.get_dispute("PP-D-DEMO-1003"))
 
 
 class HallucinatingLLM(FakeLLM):

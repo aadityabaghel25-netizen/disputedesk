@@ -610,6 +610,7 @@ async def healthz(request: Request):
 async def lifespan(app: Starlette):
     threading.Thread(target=app.state.service.seed_demo, daemon=True).start()
     app.state.service.start_watcher()   # background re-check of open disputes
+    app.state.service.start_demo_keeper()
     yield
 
 
