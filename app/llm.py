@@ -298,6 +298,4 @@ class FakeLLM:
             claims.append({"text": f"In a call on {c['call_date']}, the {speaker} said: \"{c['text']}\"", "evidence_ids": [e["id"]]})
             if speaker == "carrier":
                 claims.append({"text": "The carrier confirmed on the phone that the parcel was delivered.", "evidence_ids": [e["id"]]})
-        return {"opening": "Thank you for reviewing this case. Here are the facts, each with supporting evidence.",
-                "claims": claims,
-                "closing": "Based on this evidence, we respectfully ask PayPal to resolve the case in the seller's favour."}
+        return {"claims": claims}

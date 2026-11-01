@@ -15,11 +15,22 @@ body { background-image: radial-gradient(900px 420px at 72% -140px, color-mix(in
 .rail-foot { padding: 12px 16px 14px; border-top: 1px solid var(--line-2); }
 .rail-foot button { width: 100%; justify-content: center; }
 .rail-foot .hint { display: block; text-align: center; font-size: 11.5px; color: var(--muted); margin-top: 6px; }
-.rail-open { position: fixed; right: 14px; bottom: 14px; z-index: 24; display: none; box-shadow: var(--shadow-lg); border-radius: 999px; }
+.rail-open { position: fixed; right: 12px; bottom: 12px; z-index: 24; display: none; box-shadow: var(--shadow-lg); border-radius: 999px; background: var(--card); color: var(--text); border-color: var(--line); font-size: 13px; padding: 7px 12px; }
+.rail-open:hover { background: var(--line-2); filter: none; }
 body.rail-closed .rail { display: none; }
-body.rail-closed .rail-open { display: inline-flex; }
+@media (max-width: 900px) { body.rail-closed .rail-open { display: inline-flex; } footer.foot { padding-bottom: 64px; } }
 @media (min-width: 1240px) { body:not(.rail-closed) .wrap { margin-right: var(--rail); } }
 @media (max-width: 1239px) { .rail { box-shadow: var(--shadow-lg); width: min(var(--rail), 100vw); } }
+
+/* ---------- status marks ---------- */
+.alert-mark { flex: none; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; background: var(--bad); color: var(--card); font-size: 12.5px; font-weight: 800; line-height: 1; }
+.st { display: inline-grid; place-items: center; flex: none; width: 16px; height: 16px; border-radius: 50%; margin-right: 6px; vertical-align: -3px; font-size: 10px; font-weight: 800; font-style: normal; line-height: 1; }
+.st.ok { background: var(--ok-bg); color: var(--ok); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ok) 35%, transparent); }
+.st.bad { background: var(--bad-bg); color: var(--bad); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bad) 35%, transparent); }
+.st.q, .st.warn { background: var(--warn-bg); color: var(--warn); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 35%, transparent); }
+.checks li { display: flex; align-items: flex-start; gap: 0; }
+.checks li .st { margin-top: 2px; }
+td.num, th.num, .amount { white-space: nowrap; }
 
 /* ---------- live pulse ---------- */
 .pulse { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
@@ -111,3 +122,37 @@ select { max-width: 100%; padding: 7px 10px; border: 1px solid var(--line); bord
 input[type=date], input[type=file] { padding: 7px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: var(--text); font: inherit; max-width: 100%; color-scheme: light dark; }
 
 @media (prefers-reduced-motion: reduce) { .pulse.working, .work-item::after, .pipeline li.on .node { animation: none; } }
+
+/* ---------- case header on small screens ---------- */
+.hero-numbers { display: flex; gap: 26px; flex-wrap: wrap; text-align: right; }
+@media (max-width: 640px) {
+  .hero-numbers { text-align: left; width: 100%; justify-content: space-between; }
+  .amount { font-size: 22px; }
+  /* The case list becomes cards, so nothing scrolls sideways */
+  table.cases, table.cases tbody { display: block; }
+  table.cases tr:first-child { display: none; }
+  table.cases tr.row-link { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; padding: 12px 6px; border-bottom: 1px solid var(--line-2); }
+  table.cases tr.row-link:last-child { border-bottom: 0; }
+  table.cases td { display: block; padding: 0; border: 0; }
+  table.cases td:nth-child(5) { grid-column: 1 / -1; }
+}
+
+/* ---------- proof on every claim, and closing the gap ---------- */
+.claim-proof > summary { cursor: pointer; list-style: none; }
+.claim-proof > summary::-webkit-details-marker { display: none; }
+.claim-proof > summary::after { content: " Show"; color: var(--brand); font-weight: 600; }
+.claim-proof[open] > summary::after { content: " Hide"; }
+.proof-row { display: flex; gap: 8px; margin-top: 8px; padding: 8px 10px; border-radius: 9px; background: var(--line-2); font-size: 12.5px; overflow-wrap: anywhere; }
+.proof-row .cite { flex: none; align-self: flex-start; }
+.proof-row .quote { margin-top: 4px; }
+.proof-card.gap { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+.gap-row { display: flex; gap: 8px; align-items: flex-start; padding: 7px 0; }
+.gap-row .st { margin: 2px 0 0; }
+.sample-proof { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; margin: 8px 0 4px; }
+.add-proof { margin-top: 10px; }
+.proof-form { display: grid; gap: 10px; margin-top: 8px; }
+.proof-form .row { display: flex; flex-wrap: wrap; gap: 10px; }
+.proof-form .wide { flex: 1 1 100%; }
+.proof-form .check { display: flex; gap: 8px; align-items: flex-start; }
+.proof-form .check input { margin-top: 3px; }
+.proof-form input[type=text] { min-width: 180px; }

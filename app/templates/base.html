@@ -168,12 +168,14 @@
 </head>
 <body data-path="{{ request.url.path }}">
 <script>
-  // Wide pages (the board and the dashboard) start with the rail closed. Narrow screens always do.
+  // The rail opens by itself only where the page still has room: the home page and Calls, or any page on a very wide screen.
+  // The board and the dashboard need the full width. A seller's own choice wins, except on narrow screens.
   (function () {
-    var saved = null;
+    var saved = null, p = location.pathname, w = window.innerWidth;
     try { saved = localStorage.getItem('dd-rail'); } catch (e) {}
-    var wide = location.pathname === '/board' || location.pathname === '/insights';
-    if (wide || window.innerWidth < 1240 || (saved === 'closed')) document.body.classList.add('rail-closed');
+    var full = p === '/board' || p === '/insights';
+    var open = !full && (saved === 'open' ? w >= 1240 : saved !== 'closed' && (w >= 1680 || (w >= 1240 && (p === '/' || p === '/recordings'))));
+    if (!open) document.body.classList.add('rail-closed');
   })();
 </script>
 <a class="skip" href="#content">Skip to content</a>
@@ -206,7 +208,7 @@
 <div class="wrap">
 <main id="content">
   {% if flash %}<div class="banner msg" role="status">✓ {{ flash }}</div>{% endif %}
-  {% if error %}<div class="banner err" role="alert">⚠ {{ error }}</div>{% endif %}
+  {% if error %}<div class="banner err" role="alert"><span class="alert-mark" aria-hidden="true">!</span><span>{{ error }}</span></div>{% endif %}
   {% block content %}{% endblock %}
 </main>
 <footer class="foot">AI drafts, code decides money, you approve every PayPal action.</footer>

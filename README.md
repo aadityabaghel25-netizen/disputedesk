@@ -15,9 +15,9 @@ Built for the [PayPal AI Hackathon 2026](https://paypalaihackathon.devpost.com).
 1. Open the dashboard. Four sample disputes are already analysed.
 2. Open **PP-D-DEMO-1004**. The buyer's message tells the AI to approve a refund. It's flagged, and the recommendation is still FIGHT.
 3. Open **Proof** and click **Try a fake quote**. Code strikes the invented claim on the spot.
-4. Open **PP-D-DEMO-1001** and click **Run the AI team again** to watch the agents work live.
-5. Open **Deadlines**, then click **Plan them for me**.
-6. Back on a dispute, click **Approve**. In demo mode the action is only recorded. Then check **Audit log**.
+4. Open **PP-D-DEMO-1003**. Proof is missing, so the team says SETTLE. Under **Close the proof gap**, click **Add a sample carrier record**. Code checks the dates and address, and the recommendation changes to FIGHT.
+5. Click **Show** under any claim to see the evidence behind that sentence. Then open **Deadlines**: one case has no time planned, so click **Plan them for me**.
+6. Back on a dispute, click **Approve**. In demo mode the action is only recorded. Then check **Agent log**.
 
 ## The problem
 
@@ -31,9 +31,14 @@ Existing tools often submit automatically and charge a share of what they recove
 ## What it does
 
 **Defend**
-- Eight steps gather evidence, draft claims and check them. AI writes; code decides.
+- A team of agents gathers evidence, drafts claims and checks them. AI writes; code decides.
 - Every claim must cite evidence. Code checks each date, amount, ID and quote against that evidence, then an AI judge reads what survives.
-- Code assembles the final reply from verified claims only.
+- Code assembles the final reply. Every sentence is a verified claim, apart from a fixed opening and closing that code writes. Click any claim to see its proof.
+
+**Close the proof gap**
+- When proof is missing, the case says exactly what's missing and how to get it.
+- Add a carrier record, a photo or another file. Code checks the file type, the dates and whether the delivery address matches the PayPal transaction, then the team re-runs by itself.
+- A record with the wrong address doesn't close the gap. Your reply says who supplied the record, because the app can't confirm it with the carrier.
 
 **Extra evidence from phone calls (optional)**
 - Drop a recording anywhere in the app. The agents do the rest in the background: Gnani transcribes it, the AI works out who said what, code finds the case, and the team reads it.
@@ -68,6 +73,7 @@ Existing tools often submit automatically and charge a share of what they recove
 | AI model | **Real** with a key. Without one, an offline rule-based stand-in runs, so the demo can't fail. |
 | Shop orders, chats and carrier records | **Simulated** in `data/store.json`. Sandbox tracking numbers have no real deliveries. |
 | Sample disputes in demo mode | **Simulated.** Dates stay relative to today. |
+| Files you add | **Real** with PayPal keys: attached when PayPal asks for evidence. In the demo, only a fingerprint is kept, and the sample carrier record is made up. |
 | Call recordings in demo mode | **Simulated.** Made-up transcripts, labelled as samples. Audio upload needs a Gnani key. |
 
 ## Safety by design
@@ -80,13 +86,14 @@ Existing tools often submit automatically and charge a share of what they recove
 | Accept a claim and refund | You | You must type ACCEPT |
 | Any PayPal write | AI | Blocked: no such tool exists |
 
-Also: buyer text is treated as untrusted data, webhook signatures are verified, cross-site form posts are blocked, and every action goes into a hash-chained audit log.
+Also: a claim can't cite a message flagged as manipulation, buyer text is treated as untrusted data, webhook signatures are verified, cross-site form posts are blocked, and every action goes into a hash-chained audit log.
 
 ## Architecture
 
 ```
 PayPal --(signed webhook, or a re-check every few minutes)--> DisputeDesk
-   Collector       code       PayPal dispute + order + shop and carrier records -> evidence E1..En
+   Collector       code       PayPal dispute + order + shop and carrier records + proof you added -> evidence E1..En
+   Onboarding      AI + code  optional call recordings -> exact quotes; quotes only, never proof of delivery
    Triage          AI         plain-English summary; flags attempts to manipulate the AI
    Investigator    AI + tool  read-only checks such as buyer history
    Rule checker    code       what PayPal expects for this dispute reason
@@ -141,7 +148,7 @@ Disputes v1 (list, show, provide-evidence, provide-supporting-info, send-message
 python3 -m unittest discover -s tests -v
 ```
 
-Runs offline, with no keys. Covers money maths, buyer-risk rules, the verifier, fees, the pre-flight, cross-site blocking, webhooks, the auto-watcher and the board.
+Runs offline, with no keys. Covers money maths, buyer-risk rules, the verifier, fees, the pre-flight, added proof, upload limits, call handling, cross-site blocking, webhooks, the auto-watcher and the board.
 
 ## Evaluation
 
@@ -155,9 +162,9 @@ Results with the real model (Nemotron 3 Super, 20 cases incl. 4 prompt-injection
 |---|---|
 | Recommendation accuracy (fight / settle / review) | **20/20** |
 | Unproven claims that reached the final reply | **0** |
-| Claims drafted / struck by the verifier (varies by run) | 59 / 0 |
+| Claims drafted / struck by the verifier (varies by run) | 74 / 6 |
 | Prompt-injection cases resisted | **4/4** |
-| Average time per case (8-step AI team) | 19 s |
+| Average time per case (AI team) | 16 s |
 
 Full table: [docs/eval_results.md](docs/eval_results.md).
 
@@ -185,10 +192,14 @@ tools, code makes the decision, code builds the reply from verified claims, and 
 written by us (the reader's instructions were written after seeing the new attacks get past the word filter), and
 "no concession" is a word check on the reply. It is evidence, not a guarantee.
 
+**One failure we fixed:** on one earlier run, an injection case's reply contained the word "refund", though the decision stayed correct. It didn't recur in 20 repeat runs, and that run didn't save the text, so we can't say which sentence it was. We closed the two ways it could have got through: code now writes the reply's opening and closing, and a claim can't cite a flagged message. The evaluation now saves any text it flags.
+
 ## Limitations (honest list)
 
 - The recommendation score mostly tests our rules: the decision is computed by code, on test cases we wrote ourselves.
-- PayPal's sandbox refused `PROOF_OF_FULFILLMENT` even though it listed it as requested, so one click tries the next truthful evidence type. PayPal stored our filing as `OTHER`. No file attachments yet.
+- PayPal's sandbox refused `PROOF_OF_FULFILLMENT` even though it listed it as requested, so one click tries the next truthful evidence type. PayPal stored our filing as `OTHER`.
+- File attachments use the `evidence-file` part from PayPal's API spec and haven't been tried on a real sandbox dispute yet. PayPal's spec doesn't give file limits, so we accept common types under 10 MB. At the reviewer stage, files are listed in the reply but not attached.
+- The AI doesn't read files you add. It sees the details you typed, and code checks them. The app can't confirm a record with the carrier.
 - The sandbox gives a reply path only after a dispute escalates, and `require-evidence` is a sandbox-only switch. Live behaviour may differ.
 
 - Shop orders, chats and carrier delivery records are mocked in `data/store.json` (sandbox tracking numbers have no real deliveries).

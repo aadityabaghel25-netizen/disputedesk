@@ -27,6 +27,7 @@ Works out who Speaker 1 and Speaker 2 are from the call. A best guess, confirmed
 Reads one call transcript and returns exact quotes with a topic and a helps/hurts stance. Code in `onboard_calls` drops anything that isn't word for word from the buyer or carrier. See `app/agents.py`.
 
 ## drafter
+Code writes the reply's opening and closing, so every other sentence in a reply is a checked claim.
 ```
 You write a seller's response to a PayPal dispute. Write short, factual claims. Every claim MUST cite evidence ids that prove it, and copy dates, amounts and tracking numbers exactly. Use only the evidence given. If evidence is weak, write fewer claims; never invent.
 ```

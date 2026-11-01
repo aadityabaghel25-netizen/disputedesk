@@ -2,10 +2,11 @@
 {% block title %}Insights · DisputeDesk{% endblock %}
 {% block head %}
 <style>
-  #studio { height: 860px; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+  #studio { height: 720px; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+  #studio:not(.editing) .ag-studio-root-panel-container-right { display: none; }
   .dd-ratio { height: 100%; padding: 10px 16px; overflow: hidden; display: flex; flex-direction: column; justify-content: center; font-family: Inter, system-ui, sans-serif; color: var(--text); }
   .dd-ratio .t { font-size: 13px; font-weight: 700; }
-  .dd-ratio .n { font-size: 24px; font-weight: 800; letter-spacing: -.02em; margin: 0 0 6px; }
+  .dd-ratio .n { font-size: 22px; line-height: 1.2; font-weight: 800; letter-spacing: -.02em; margin: 3px 0 7px; }
   .dd-ratio .bar { position: relative; height: 10px; border-radius: 999px; background: var(--line-2); }
   .dd-ratio .fill { position: absolute; inset: 0 auto 0 0; border-radius: 999px; background: var(--ok); }
   .dd-ratio.over .fill { background: var(--bad); }
@@ -46,14 +47,14 @@
       el.className = 'dd-ratio' + (over ? ' over' : '');
       el.innerHTML = `<div class="t">Dispute ratio vs PayPal's 1.5% line</div><div class="n">${pct.toFixed(2)}%</div>
         <div class="bar"><div class="fill" style="width:${pct * 100 / scale}%"></div><div class="mark" style="left:${r.limit_pct * 100 / scale}%"></div></div>
-        <div class="s">${r.disputes} disputes on ${r.sales} sales. At ${r.limit_pct}% with over 100 sales in 3 months, PayPal's fee rises from $15 to $30 and can apply even on a win.</div>`;
+        <div class="s">${r.disputes} disputes on ${r.sales} sales. At ${r.limit_pct}%, PayPal's fee can rise from $15 to $30.</div>`;
     }
   }
 
   const page = {
     id: 'overview',
     widgets: {
-      money: value('Money disputed', 'cases.amount', 'sum'),
+      money: value('Money disputed (USD)', 'cases.amount', 'sum'),
       kept: value('Claims proven', 'cases.kept', 'sum'),
       struck: value('Claims struck', 'cases.struck', 'sum'),
       flagged: value('Manipulation flagged', 'cases.flagged', 'sum'),
@@ -102,7 +103,7 @@
   });
   const edit = document.getElementById('studio-edit');
   edit.hidden = false;
-  edit.onclick = () => { const on = edit.dataset.on !== '1'; edit.dataset.on = on ? '1' : ''; studio.setMode ? studio.setMode(on ? 'edit' : 'view') : studio.updateProperties && studio.updateProperties({ mode: on ? 'edit' : 'view' }); edit.textContent = on ? 'Done editing' : 'Edit dashboard'; };
+  edit.onclick = () => { const on = edit.dataset.on !== '1'; edit.dataset.on = on ? '1' : ''; box.classList.toggle('editing', on); studio.setMode ? studio.setMode(on ? 'edit' : 'view') : studio.updateProperties && studio.updateProperties({ mode: on ? 'edit' : 'view' }); edit.textContent = on ? 'Done editing' : 'Edit dashboard'; };
 })();
 </script>
 {% endblock %}

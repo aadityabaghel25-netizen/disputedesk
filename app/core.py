@@ -231,6 +231,12 @@ def extract_facts(text: str) -> set[str]:
     return facts
 
 
+# The only words in a reply that aren't a checked claim. Code owns them, because a sentence the verifier
+# never sees is a sentence that could say anything, such as agreeing to a refund.
+REPLY_OPENING = "Thank you for reviewing this case. These are the facts, each with its evidence."
+REPLY_CLOSING = "Please see the evidence listed below."
+
+
 def check_claim(claim: dict, evidence_by_id: dict[str, dict]) -> tuple[bool, str]:
     ids = claim.get("evidence_ids") or []
     if not ids:
@@ -238,6 +244,8 @@ def check_claim(claim: dict, evidence_by_id: dict[str, dict]) -> tuple[bool, str
     missing = [i for i in ids if i not in evidence_by_id]
     if missing:
         return False, f"Cites evidence that does not exist: {', '.join(missing)}."
+    if any(evidence_by_id[i]["content"].get("injection_suspected") for i in ids):
+        return False, "Cites a message flagged as trying to manipulate the AI."
     cited_text = " ".join(str(evidence_by_id[i]["content"]) + " " + evidence_by_id[i]["summary"] for i in ids)
     cited_facts = extract_facts(cited_text)
     for quote in QUOTE_PATTERN.findall(claim.get("text", "")):
@@ -302,8 +310,6 @@ def check_call_claim(claim: dict, evidence_by_id: dict[str, dict]) -> tuple[bool
     calls = [e for e in cited if e.get("kind") == CALL_KIND]
     if not calls:
         return True, ""
-    if any(e["content"].get("injection_suspected") for e in calls):
-        return False, "Cites a call flagged as trying to manipulate the AI."
     text = claim.get("text", "")
     quotes = [q for q in QUOTE_PATTERN.findall(text) if len(q.split()) >= 3]
     if not quotes:
@@ -469,8 +475,10 @@ def protection_preflight(dispute: dict, evidence: list[dict]) -> dict:
           "Not stated on this dispute." if flag is None else f"PayPal's record says {'eligible' if flag else 'not eligible'}.")
     if reason in (NOT_RECEIVED, UNAUTHORISED):
         track = [e["content"] for e in evidence if e["kind"] == "tracking"]
-        check("Carrier shows delivered", any(c.get("carrier_status") == "DELIVERED" for c in track),
-              "Terms ask for carrier proof with a delivered status.")
+        delivered = [c for c in track if c.get("carrier_status") == "DELIVERED"]
+        check("Carrier shows delivered", bool(delivered),
+              "From a carrier record you added. PayPal will judge it." if delivered and all(c.get("seller_added") for c in delivered)
+              else "Terms ask for carrier proof with a delivered status.")
         check("Delivered to the transaction address",
               any(e["kind"] == "address_check" and e["content"].get("match") for e in evidence),
               "The recipient address must match Transaction Details. A later redirect voids eligibility.")
@@ -516,6 +524,28 @@ def money_outcomes(dispute: dict, protection_verdict: str, offer_cents: int | No
         # Fighting costs p*win + (1-p)*lose. Below this win chance, the offer is the cheaper choice.
         out["breakeven_pct"] = max(0, min(100, round((lose - offer_cents) * 100 / (lose - win))))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Closing the gap: what's missing, how to get it, and which proof the seller can add. File types are checked
+# from the file's own first bytes, because a file name can say anything.
+# ---------------------------------------------------------------------------
+
+PROOF_HELP = {
+    "Tracking shows the item was delivered": ("carrier_record", "Download the delivery record from the carrier's website. It should show delivered, the date and the address."),
+    "Delivered to the address on the PayPal transaction": ("carrier_record", "The address on the record must match the PayPal transaction. A later redirect can void Seller Protection."),
+    "Photo of the item before shipping": ("photo", "Add a photo of the item, taken before you shipped it."),
+    "Original listing description": ("other", "Save a copy of your listing as a PDF or screenshot, and add it here."),
+}
+FILE_SIGNATURES = ((b"%PDF-", "application/pdf"), (b"\xff\xd8\xff", "image/jpeg"), (b"\x89PNG\r\n\x1a\n", "image/png"), (b"GIF8", "image/gif"))
+
+
+def proof_gaps(missing: list[str]) -> list[dict]:
+    return [{"label": m, "kind": PROOF_HELP[m][0], "how": PROOF_HELP[m][1]} for m in missing if m in PROOF_HELP]
+
+
+def sniff_file_type(content: bytes) -> str | None:
+    return next((mime for magic, mime in FILE_SIGNATURES if content.startswith(magic)), None)
 
 
 # ---------------------------------------------------------------------------
@@ -606,7 +636,7 @@ def evidence_payload_options(dispute: dict, evidence: list[dict], reply_text: st
 def build_evidence_payload(dispute: dict, evidence: list[dict], reply_text: str) -> list[dict]:
     """Turn our verified evidence into PayPal's provide-evidence format."""
     payload = []
-    for item in evidence:
+    for item in sorted(evidence, key=lambda e: e["content"].get("carrier_status") != "DELIVERED"):   # the record that shows delivery comes first
         c = item["content"]
         if item["kind"] == "tracking" and c.get("tracking_number"):
             payload.append({

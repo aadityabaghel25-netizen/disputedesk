@@ -193,6 +193,35 @@ def gather(pp, store: Store, dispute: dict) -> tuple[list[dict], dict, list[str]
     return items, ctx, warnings
 
 
+def add_documents(items: list[dict], documents: list[dict], order: dict | None) -> None:
+    """Proof the seller added. The dates and address they typed go through the same checks as shop records. The AI
+    never reads the file itself, and every summary says who supplied it, so nobody mistakes it for a live carrier check."""
+
+    def add(kind, source, summary, content):
+        items.append({"id": f"E{len(items) + 1}", "kind": kind, "source": source, "trusted": True, "summary": summary,
+                      "content": {**content, "seller_added": True}})
+
+    pp_addr = paypal_address_text(order) if order else None
+    for doc in documents:
+        f, name, sha = doc["fields"], doc["filename"], doc["sha256"]
+        if doc["doc_type"] == "carrier_record":
+            add("tracking", f"Carrier record added by the seller ({name})",
+                f"Seller added a {f['carrier']} record for tracking {f['tracking_number']}: shipped {f['shipped_on']}, delivered {f['delivered_on']} "
+                f"to {f['delivered_to']}. File fingerprint {sha[:12]}. DisputeDesk didn't check this with the carrier.",
+                {"carrier": f["carrier"], "tracking_number": f["tracking_number"], "carrier_status": "DELIVERED", "shipped_on": f["shipped_on"],
+                 "delivered_on": f["delivered_on"], "delivered_to": f["delivered_to"], "signature": None, "sha256": sha})
+            if pp_addr:
+                match = addresses_match(pp_addr, f["delivered_to"])
+                add("address_check", "DisputeDesk check (code)",
+                    ("Delivery address on the seller's record matches" if match else "Delivery address on the seller's record does NOT match")
+                    + " the shipping address on the PayPal transaction.",
+                    {"paypal_address": pp_addr, "delivered_to": f["delivered_to"], "match": match})
+        elif doc["doc_type"] == "photo":
+            add("photo", f"Photo added by the seller ({name})", f"Seller added a photo of the item. File fingerprint {sha[:12]}.", {"description": name, "sha256": sha})
+        else:
+            add("seller_document", f"Document added by the seller ({name})", f"Seller added this document. File fingerprint {sha[:12]}.", {"filename": name, "sha256": sha})
+
+
 CALL_TOPICS = {"receipt": "whether the order arrived", "delivery": "how the order was delivered",
                "item_condition": "the condition of the item", "purchase": "whether they made the purchase", "other": "the order"}
 

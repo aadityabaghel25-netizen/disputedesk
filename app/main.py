@@ -9,6 +9,7 @@ Routes
   GET  /disputes/{id}           one dispute: evidence, AI draft, struck claims, approve buttons
   POST /disputes/{id}/analyze   run the AI team (in the background)
   POST /disputes/{id}/approve   human-approved action -> PayPal
+  POST /disputes/{id}/documents add proof the seller holds; the team re-runs by itself
   GET  /recordings              calls the onboarding agent has picked up; POST /recordings/upload runs it in the background
   GET  /agents/live             what every agent is doing right now (JSON, polled by the live panel)
   POST /sync                    pull disputes from PayPal now
@@ -69,7 +70,7 @@ ACTIVITY_LABELS = {
     "webhook_rejected": "Unverified webhook blocked", "rules_changed": "Your rules changed", "block_planned": "Work planned", "block_moved": "Work moved before the deadline",
     "download_pack": "Evidence pack opened", "prevent_tracking_added": "Tracking added to PayPal", "prevent_no_tracking": "No tracking number to add",
     "prevent_failed": "Tracking could not be added", "watch_failed": "PayPal check failed",
-    "call_added": "Call recording added", "call_removed": "Call recording removed", "call_transcribed": "Call recording transcribed", "call_selected": "Call recording selected for a case", "call_labelled": "Speakers worked out on a call", "call_confirmed": "You confirmed a call",
+    "document_added": "You added proof", "document_removed": "You removed proof", "call_added": "Call recording added", "call_removed": "Call recording removed", "call_transcribed": "Call recording transcribed", "call_selected": "Call recording selected for a case", "call_labelled": "Speakers worked out on a call", "call_confirmed": "You confirmed a call",
     "call_failed": "A call couldn't be read", "call_consent_confirmed": "You confirmed recording consent", "call_consent_withdrawn": "You withdrew recording consent",
 }
 templates.env.globals["activity_label"] = lambda a: ACTIVITY_LABELS.get(a, a.replace("_", " ").capitalize())
@@ -95,6 +96,23 @@ class BasicAuth(BaseHTTPMiddleware):
             except (ValueError, UnicodeDecodeError):
                 pass
         return PlainTextResponse("Login required", 401, headers={"WWW-Authenticate": 'Basic realm="DisputeDesk"'})
+
+
+class UploadLimit(BaseHTTPMiddleware):
+    """Refuse an oversized upload before reading it, so one big request can't fill the disk."""
+
+    LIMIT = 11_000_000
+
+    async def dispatch(self, request, call_next):
+        path = request.url.path
+        if request.method == "POST" and (path == "/recordings/upload" or path.endswith("/documents")):
+            try:
+                too_big = int(request.headers.get("content-length", "")) > self.LIMIT
+            except ValueError:
+                too_big = True   # no declared size
+            if too_big:
+                return JSONResponse({"error": "That file is too big. The limit is 10 MB."}, 413)
+        return await call_next(request)
 
 
 class SameOrigin(BaseHTTPMiddleware):
@@ -139,7 +157,8 @@ async def dispute_page(request: Request):
     a = s.db.latest_analysis(dispute_id)
     cents, cur = core.dispute_amount(d)
     return templates.TemplateResponse(request, "dispute.html", {
-        "calls": s.db.list_calls(dispute_id), "call_labels": s.CALL_LABELS,
+        "calls": s.db.list_calls(dispute_id), "call_labels": s.CALL_LABELS, "documents": s.db.list_documents(dispute_id), "carriers": s.CARRIERS,
+        "gaps": core.proof_gaps(a["advice"]["required_missing"]) if a else [], "today": core.datetime.now(core.timezone.utc).date().isoformat(),
         "d": d, "a": a, "evidence": s.db.get_evidence(dispute_id), "amount": f"{core.from_cents(cents)} {cur}",
         "deadline": core.deadline_info(d), "allowed": core.allowed_actions(d), "demo": s.demo,
         "running": dispute_id in s.running, "audit": s.db.audit_log(dispute_id, 20),
@@ -176,6 +195,41 @@ async def approve(request: Request):
             "make_offer": "Offer sent", "accept_claim": "Claim accepted"}.get(action, "Done")
     suffix = " (demo: nothing was sent to PayPal)" if s.demo else " to PayPal"
     return RedirectResponse(f"/disputes/{dispute_id}?msg={done}{suffix}.", 303)
+
+
+async def add_document(request: Request):
+    s = svc(request)
+    dispute_id = request.path_params["dispute_id"]
+    form = await request.form()
+    upload = form.get("file")
+    try:
+        if not hasattr(upload, "read"):
+            raise ActionError("Choose a file.")
+        content = await upload.read(s.MAX_DOCUMENT + 1)
+        s.add_document(dispute_id, {k: v for k, v in form.items() if k != "file"}, content, upload.filename or "document", s.settings.admin_user)
+    except ActionError as e:
+        return RedirectResponse(f"/disputes/{dispute_id}?err={urllib.parse.quote(str(e))}#proof", 303)
+    return _rerun_agents(s, [dispute_id], f"/disputes/{dispute_id}", "Proof added.")
+
+
+async def sample_document(request: Request):
+    s = svc(request)
+    dispute_id = request.path_params["dispute_id"]
+    try:
+        s.add_sample_document(dispute_id, s.settings.admin_user)
+    except ActionError as e:
+        return RedirectResponse(f"/disputes/{dispute_id}?err={urllib.parse.quote(str(e))}#proof", 303)
+    return _rerun_agents(s, [dispute_id], f"/disputes/{dispute_id}", "Sample proof added.")
+
+
+async def remove_document(request: Request):
+    s = svc(request)
+    dispute_id = request.path_params["dispute_id"]
+    try:
+        s.remove_document(dispute_id, request.path_params["doc_id"], s.settings.admin_user)
+    except ActionError as e:
+        return RedirectResponse(f"/disputes/{dispute_id}?err={urllib.parse.quote(str(e))}#proof", 303)
+    return _rerun_agents(s, [dispute_id], f"/disputes/{dispute_id}", "Proof removed.")
 
 
 def _render_recordings(request: Request, s: Service):
@@ -265,7 +319,7 @@ async def agents_live(request: Request):
     s = svc(request)
     state = s.live_state()
     state["feed"] = [{"ts": r["ts"][11:16], "who": AGENT_ACTORS.get(r["actor"], "You"), "what": ACTIVITY_LABELS.get(r["action"], r["action"].replace("_", " ").capitalize()),
-                      "dispute_id": r["dispute_id"]} for r in s.db.audit_log(limit=14)]
+                      "dispute_id": r["dispute_id"]} for r in s.db.audit_log(limit=40) if r["action"] not in ("call_added", "call_labelled", "sync")][:12]
     return JSONResponse(state)
 
 
@@ -566,6 +620,9 @@ def create_app(service: Service | None = None) -> Starlette:
         Route("/disputes/{dispute_id}/analyze", analyze, methods=["POST"]),
         Route("/disputes/{dispute_id}/approve", approve, methods=["POST"]),
         Route("/disputes/{dispute_id}/pack", pack),
+        Route("/disputes/{dispute_id}/documents", add_document, methods=["POST"]),
+        Route("/disputes/{dispute_id}/documents/sample", sample_document, methods=["POST"]),
+        Route("/disputes/{dispute_id}/documents/{doc_id:int}/delete", remove_document, methods=["POST"]),
         Route("/recordings", recordings, methods=["GET", "POST"]),
         Route("/recordings/upload", upload_recording, methods=["POST"]),
         Route("/recordings/sample", sample_recording, methods=["POST"]),
@@ -590,7 +647,7 @@ def create_app(service: Service | None = None) -> Starlette:
         Route("/rules", rules, methods=["GET", "POST"]),
         Route("/audit", audit),
         Route("/healthz", healthz),
-    ], middleware=[Middleware(SameOrigin), Middleware(BasicAuth)], lifespan=lifespan)
+    ], middleware=[Middleware(SameOrigin), Middleware(BasicAuth), Middleware(UploadLimit)], lifespan=lifespan)
     app.state.service = service or Service(get_settings())
     return app
 

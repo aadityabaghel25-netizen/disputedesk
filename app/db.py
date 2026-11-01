@@ -12,6 +12,7 @@ Tables:
   audit     an append-only, hash-chained log of everything that happened
   rules     seller rules edited in the UI (override the .env defaults)
   blocks    planned work on a dispute, for the deadline board (internal; never sent to PayPal)
+  documents proof the seller added to a case, such as a carrier delivery record
   calls     the seller's call recordings as transcripts (audio is never stored). dispute_id '' = not matched yet
 """
 
@@ -64,6 +65,19 @@ CREATE TABLE IF NOT EXISTS rules (
     name         TEXT PRIMARY KEY,
     value        TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS documents (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    dispute_id   TEXT NOT NULL,
+    created_at   TEXT NOT NULL,
+    actor        TEXT NOT NULL,
+    doc_type     TEXT NOT NULL,
+    filename     TEXT NOT NULL,
+    mime         TEXT NOT NULL,
+    sha256       TEXT NOT NULL,
+    size         INTEGER NOT NULL,
+    fields       TEXT NOT NULL,
+    content      BLOB
+);
 CREATE TABLE IF NOT EXISTS calls (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     dispute_id   TEXT NOT NULL,
@@ -103,7 +117,7 @@ class DB:
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
-        self.lock = threading.Lock()   # the web server may run background jobs in parallel
+        self.lock = threading.RLock()   # web requests and background agents share this one connection
         with self.lock:
             self.conn.executescript(SCHEMA)
             cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(calls)")}
@@ -115,6 +129,15 @@ class DB:
 
     def close(self) -> None:
         self.conn.close()
+
+    def _all(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
+        """Reads take the lock too. Without it, a read can collide with a background job and come back empty."""
+        with self.lock:
+            return self.conn.execute(sql, params).fetchall()
+
+    def _one(self, sql: str, params: tuple = ()) -> sqlite3.Row | None:
+        with self.lock:
+            return self.conn.execute(sql, params).fetchone()
 
     # -- events --------------------------------------------------------------
 
@@ -130,9 +153,8 @@ class DB:
             return cur.rowcount == 1
 
     def recent_events(self, limit: int = 20) -> list[dict]:
-        rows = self.conn.execute(
-            "SELECT event_id, event_type, resource_id, verified, received_at FROM events "
-            "ORDER BY received_at DESC LIMIT ?", (limit,)).fetchall()
+        rows = self._all("SELECT event_id, event_type, resource_id, verified, received_at FROM events "
+                         "ORDER BY received_at DESC LIMIT ?", (limit,))
         return [dict(r) for r in rows]
 
     # -- disputes ------------------------------------------------------------
@@ -155,11 +177,11 @@ class DB:
             self.conn.commit()
 
     def get_dispute(self, dispute_id: str) -> dict | None:
-        row = self.conn.execute("SELECT data FROM disputes WHERE dispute_id=?", (dispute_id,)).fetchone()
+        row = self._one("SELECT data FROM disputes WHERE dispute_id=?", (dispute_id,))
         return json.loads(row["data"]) if row else None
 
     def list_disputes(self) -> list[dict]:
-        rows = self.conn.execute("SELECT data FROM disputes ORDER BY updated_at DESC").fetchall()
+        rows = self._all("SELECT data FROM disputes ORDER BY updated_at DESC")
         return [json.loads(r["data"]) for r in rows]
 
     # -- evidence ------------------------------------------------------------
@@ -175,12 +197,39 @@ class DB:
             self.conn.commit()
 
     def get_evidence(self, dispute_id: str) -> list[dict]:
-        rows = self.conn.execute(
-            "SELECT * FROM evidence WHERE dispute_id=? ORDER BY CAST(SUBSTR(evidence_id, 2) AS INTEGER)",
-            (dispute_id,)).fetchall()
+        rows = self._all("SELECT * FROM evidence WHERE dispute_id=? ORDER BY CAST(SUBSTR(evidence_id, 2) AS INTEGER)", (dispute_id,))
         return [{"id": r["evidence_id"], "kind": r["kind"], "source": r["source"],
                  "trusted": bool(r["trusted"]), "summary": r["summary"],
                  "content": json.loads(r["content"])} for r in rows]
+
+    # -- documents the seller added ---------------------------------------------
+
+    DOC_COLUMNS = "id, dispute_id, created_at, actor, doc_type, filename, mime, sha256, size, fields"
+
+    def add_document(self, dispute_id: str, actor: str, doc_type: str, filename: str, mime: str, sha256: str, size: int,
+                     fields: dict, content: bytes | None) -> int:
+        with self.lock:
+            cur = self.conn.execute(
+                "INSERT INTO documents (dispute_id, created_at, actor, doc_type, filename, mime, sha256, size, fields, content) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)", (dispute_id, now_iso(), actor, doc_type, filename, mime, sha256, size, json.dumps(fields), content))
+            self.conn.commit()
+            return cur.lastrowid
+
+    def list_documents(self, dispute_id: str) -> list[dict]:
+        rows = self._all(f"SELECT {self.DOC_COLUMNS} FROM documents WHERE dispute_id=? ORDER BY id", (dispute_id,))
+        return [{**dict(r), "fields": json.loads(r["fields"])} for r in rows]
+
+    def document_files(self, dispute_id: str) -> list[dict]:
+        return [dict(r) for r in self._all("SELECT filename, mime, content FROM documents WHERE dispute_id=? AND content IS NOT NULL ORDER BY id", (dispute_id,))]
+
+    def count_documents(self) -> int:
+        return self._one("SELECT COUNT(*) AS n FROM documents")["n"]
+
+    def delete_document(self, dispute_id: str, doc_id: int) -> bool:
+        with self.lock:
+            cur = self.conn.execute("DELETE FROM documents WHERE dispute_id=? AND id=?", (dispute_id, doc_id))
+            self.conn.commit()
+            return cur.rowcount == 1
 
     # -- calls ---------------------------------------------------------------
 
@@ -194,14 +243,14 @@ class DB:
             return cur.lastrowid
 
     def list_calls(self, dispute_id: str) -> list[dict]:
-        rows = self.conn.execute("SELECT * FROM calls WHERE dispute_id=? ORDER BY id", (dispute_id,)).fetchall()
+        rows = self._all("SELECT * FROM calls WHERE dispute_id=? ORDER BY id", (dispute_id,))
         return [dict(r) for r in rows]
 
     def all_calls(self) -> list[dict]:
-        return [dict(r) for r in self.conn.execute("SELECT * FROM calls ORDER BY id DESC").fetchall()]
+        return [dict(r) for r in self._all("SELECT * FROM calls ORDER BY id DESC")]
 
     def get_call(self, call_id: int) -> dict | None:
-        row = self.conn.execute("SELECT * FROM calls WHERE id=?", (call_id,)).fetchone()
+        row = self._one("SELECT * FROM calls WHERE id=?", (call_id,))
         return dict(row) if row else None
 
     def assign_call(self, call_id: int, dispute_id: str, matched_on: str) -> None:
@@ -238,8 +287,7 @@ class DB:
             return cur.lastrowid
 
     def latest_analysis(self, dispute_id: str) -> dict | None:
-        row = self.conn.execute(
-            "SELECT * FROM analyses WHERE dispute_id=? ORDER BY id DESC LIMIT 1", (dispute_id,)).fetchone()
+        row = self._one("SELECT * FROM analyses WHERE dispute_id=? ORDER BY id DESC LIMIT 1", (dispute_id,))
         if not row:
             return None
         return {"id": row["id"], "created_at": row["created_at"], "state": row["state"],
@@ -252,15 +300,14 @@ class DB:
 
     def all_analyses(self) -> list[dict]:
         """Latest analysis per dispute (for dashboard stats)."""
-        rows = self.conn.execute(
-            "SELECT * FROM analyses WHERE id IN (SELECT MAX(id) FROM analyses GROUP BY dispute_id)").fetchall()
+        rows = self._all("SELECT * FROM analyses WHERE id IN (SELECT MAX(id) FROM analyses GROUP BY dispute_id)")
         return [{"id": r["id"], "dispute_id": r["dispute_id"], "state": r["state"], **json.loads(r["result"])}
                 for r in rows]
 
     # -- work blocks -----------------------------------------------------------
 
     def get_blocks(self) -> dict[str, dict]:
-        return {r["dispute_id"]: dict(r) for r in self.conn.execute("SELECT * FROM blocks").fetchall()}
+        return {r["dispute_id"]: dict(r) for r in self._all("SELECT * FROM blocks")}
 
     def set_block(self, dispute_id: str, handler: str, start_at: str, end_at: str) -> None:
         with self.lock:
@@ -272,7 +319,7 @@ class DB:
     # -- seller rules ----------------------------------------------------------
 
     def get_rules(self) -> dict[str, str]:
-        return {r["name"]: r["value"] for r in self.conn.execute("SELECT * FROM rules").fetchall()}
+        return {r["name"]: r["value"] for r in self._all("SELECT * FROM rules")}
 
     def set_rule(self, name: str, value: str) -> None:
         with self.lock:
@@ -299,16 +346,15 @@ class DB:
 
     def audit_log(self, dispute_id: str | None = None, limit: int = 100) -> list[dict]:
         if dispute_id:
-            rows = self.conn.execute("SELECT * FROM audit WHERE dispute_id=? ORDER BY id DESC LIMIT ?",
-                                     (dispute_id, limit)).fetchall()
+            rows = self._all("SELECT * FROM audit WHERE dispute_id=? ORDER BY id DESC LIMIT ?", (dispute_id, limit))
         else:
-            rows = self.conn.execute("SELECT * FROM audit ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+            rows = self._all("SELECT * FROM audit ORDER BY id DESC LIMIT ?", (limit,))
         return [{**dict(r), "details": json.loads(r["details"])} for r in rows]
 
     def verify_audit_chain(self) -> tuple[bool, int | None]:
         """Re-compute every hash. Returns (ok, first_bad_row_id)."""
         prev = "GENESIS"
-        for r in self.conn.execute("SELECT * FROM audit ORDER BY id").fetchall():
+        for r in self._all("SELECT * FROM audit ORDER BY id"):
             body = json.dumps([r["ts"], r["actor"], r["action"], r["dispute_id"],
                                json.loads(r["details"]), prev], sort_keys=True)
             if r["prev_hash"] != prev or hashlib.sha256(body.encode()).hexdigest() != r["hash"]:

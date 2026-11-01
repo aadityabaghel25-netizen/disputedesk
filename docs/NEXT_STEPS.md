@@ -1,6 +1,14 @@
 # Next steps (priority order)
 
-Status as of 2026-10-30 ~06:00 IST (local Claude Code session). Tick items off and move them to MEMORY.md "Status".
+Status as of 2026-11-02. Tick items off and move them to MEMORY.md "Status".
+
+## Do these first (only Ankit can)
+1. Check the Render deploy and get the public link. `disputedesk.onrender.com` answered 503 on Nov 2, so the service may have another name or not be running.
+2. Rotate the Gnani key, since it was pasted in chat. Keep `GNANI_API_KEY` empty on the public demo.
+3. Real sandbox test: load a dispute, add a PDF under Close the proof gap, and click Approve when PayPal asks for evidence. This is the first real test of file attachments.
+4. Run `python3 scripts/setup.py decide <CASE_ID> seller` to film the won ending.
+5. Time one manual reply against DisputeDesk for a real number, then record the video.
+6. Submit on Devpost by Nov 5 for early review (text and script: `reports/Submission kit.md`).
 
 ## A. Prove the PayPal reply path (highest risk)
 - [ ] Second sandbox order **DD-1004** (`0SP7842600022632G`, created, awaiting buyer approval) paid with **PayPal balance**; buyer reports "didn't receive" with the
@@ -21,10 +29,10 @@ Status as of 2026-10-30 ~06:00 IST (local Claude Code session). Tick items off a
 - [ ] Re-run AI team on demo + real disputes; fix prompts if JSON fails (see docs/PROMPTS.md).
 - [x] `python3 scripts/eval.py` with the real model: 20/20, 0 unproven, 4/4 injections (see docs/eval_results.md).
       One run had an empty draft (reasoning tokens hit max_tokens=1200) → raised to 4000; report now counts AI fallbacks.
-- [ ] Paste eval results into README.
+- [x] Eval results in README.
 
 ## C. Deploy + webhooks
-- [ ] Create public GitHub repo `disputedesk`, `git init`, commit, push (never commit `.env`).
+- [x] Public GitHub repo created and pushed.
 - [ ] Render: New → Blueprint (render.yaml). Set env vars incl. `ADMIN_PASSWORD`.
 - [ ] `python3 scripts/setup.py webhook https://<render-url>` → set `PAYPAL_WEBHOOK_ID` on Render.
 - [ ] New sandbox payment → confirm Prevent adds tracking automatically (audit log `prevent_tracking_added`).

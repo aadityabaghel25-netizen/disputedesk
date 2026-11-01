@@ -4,7 +4,7 @@
 {% block content %}
 {% if no_password %}<div class="banner err">This dashboard is public. Set ADMIN_PASSWORD in Render's environment settings.</div>{% endif %}
 
-{% if urgent %}<div class="banner err"><span>⏰ <b>{{ urgent | length }} {{ 'dispute needs' if urgent | length == 1 else 'disputes need' }} a reply within 2 days:</b>
+{% if urgent %}<div class="banner err"><span class="alert-mark" aria-hidden="true">!</span><span><b>{{ urgent | length }} {{ 'dispute needs' if urgent | length == 1 else 'disputes need' }} a reply within 2 days:</b>
   {% for r in urgent %}<a href="/disputes/{{ r.d.dispute_id }}" class="mono">{{ r.d.dispute_id }}</a>{{ ', ' if not loop.last }}{% endfor %}.</span></div>{% endif %}
 
 <div class="page-head">
@@ -60,7 +60,7 @@
     <button type="button" class="secondary chip" data-filter="waiting" aria-pressed="false">Waiting on PayPal ({{ rows | selectattr('next.state', 'equalto', 'waiting') | list | length }})</button>
     <button type="button" class="secondary chip" data-filter="done" aria-pressed="false">Closed ({{ rows | selectattr('next.state', 'equalto', 'done') | list | length }})</button>
   </div>
-  <div class="table-wrap"><table>
+  <div class="table-wrap"><table class="cases">
     <tr><th>Dispute</th><th class="num">Amount</th><th>Reply by</th><th>Team's call</th><th>Next step</th></tr>
     {% for r in rows %}
     {% set dec = r.a.advice.decision if r.a else None %}

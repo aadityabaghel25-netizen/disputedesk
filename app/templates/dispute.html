@@ -42,7 +42,7 @@
 </style>
 {% endblock %}
 {% block content %}
-<a class="crumb" href="/">← All disputes</a>
+<a class="crumb" href="/">← Command center</a>
 {% set stage = 'decided' if outcome else 'filed' if submissions else 'approve' if a else 'build' %}
 {% set dec = a.advice.decision if a else None %}
 
@@ -52,7 +52,7 @@
       <h1>{{ reason_label(d.reason) }}</h1>
       <div class="muted small mono" style="margin-top:2px">{{ d.dispute_id }}</div>
     </div>
-    <div style="display:flex;gap:26px;flex-wrap:wrap;text-align:right">
+    <div class="hero-numbers">
       {% set u = deadline.urgency %}
       {% if deadline.due and not outcome %}<div><div class="muted small">{{ 'Reply within' if u != 'overdue' else 'Reply' }}</div>
         <div class="amount" style="color:{{ 'var(--bad)' if u in ('overdue','critical') else 'var(--warn)' if u == 'soon' else 'var(--ok)' }}">{% if u == 'overdue' %}Overdue{% else %}{{ (deadline.hours_left / 24) | round(1) }} days{% endif %}</div>
@@ -77,7 +77,7 @@
   <div class="run-strip {{ 'working' if running }}" id="case-live" data-case="{{ d.dispute_id }}">
     <div id="case-live-line" style="display:flex;gap:9px;align-items:center;flex:1;min-width:220px">
       {% if running %}<span class="pulse working"></span><span><b>AI team working…</b> Building your case. This page updates by itself.</span>
-      {% elif a %}<span class="pulse watching"></span><span><b>Team finished</b> in {{ a.seconds }}s. {{ a.claims_kept | length }} claims kept, {{ a.claims_struck | length }} struck. Nothing has gone to PayPal.</span>
+      {% elif a %}<span class="pulse watching"></span><span><b>Team finished</b>{% if a.seconds >= 1 %} in {{ a.seconds | round | int }}s{% endif %}. {{ a.claims_kept | length }} claims kept, {{ a.claims_struck | length }} struck. Nothing has gone to PayPal.</span>
       {% else %}<span class="pulse idle"></span><span>The team gathers the evidence and drafts a reply. Nothing is sent to PayPal.</span>{% endif %}
     </div>
     <form method="post" action="/disputes/{{ d.dispute_id }}/analyze">
@@ -96,15 +96,16 @@
       <div class="lbl">Recommendation</div>
       <div class="big">{{ dec | upper }}</div>
       <div>{{ a.advice.why }}</div>
+      {% if a.changed_from %}<div class="small" style="margin-top:6px"><span class="badge b-info">Changed from {{ a.changed_from | upper }}</span> after the latest evidence.</div>{% endif %}
       <div class="muted small" style="margin-top:4px">{{ a.triage.summary }}</div>
       {% if a.buyer_risk and a.buyer_risk.level != 'low' %}
         <div style="margin-top:8px"><span class="badge {{ 'b-bad' if a.buyer_risk.level == 'high' else 'b-warn' }}">{{ 'Serial disputer' if a.buyer_risk.level == 'high' else 'Buyer has disputed before' }}</span>
           <span class="small">{{ a.buyer_risk.why }}</span></div>
       {% endif %}
-      {% for w in a.warnings %}{% if 'instructions to an AI' not in w %}<div class="small" style="margin-top:8px;color:var(--warn)">⚠ {{ w }}</div>{% endif %}{% endfor %}
+      {% for w in a.warnings %}{% if 'instructions to an AI' not in w %}<div class="small" style="margin-top:8px;color:var(--warn)"><span class="st warn" aria-hidden="true">!</span> {{ w }}</div>{% endif %}{% endfor %}
       <div class="checks">
-        <div><b>What PayPal expects</b><ul>{% for x in a.advice.required_met %}<li>✅ {{ x }}</li>{% else %}<li class="muted">Nothing found yet</li>{% endfor %}</ul></div>
-        <div><b>Missing</b><ul>{% for x in a.advice.required_missing %}<li>❌ {{ x }}</li>{% else %}<li class="muted">Nothing missing</li>{% endfor %}</ul></div>
+        <div><b>What PayPal expects</b><ul>{% for x in a.advice.required_met %}<li><span class="st ok" aria-hidden="true">✓</span>{{ x }}</li>{% else %}<li class="muted">Nothing found yet</li>{% endfor %}</ul></div>
+        <div><b>Missing</b><ul>{% for x in a.advice.required_missing %}<li><span class="st bad" aria-hidden="true">✕</span>{{ x }}</li>{% else %}<li class="muted">Nothing missing</li>{% endfor %}</ul></div>
       </div>
       <details class="small" style="margin-top:10px"><summary><b>Decision receipt</b> <span class="muted">(decided by code, not AI)</span></summary>
         <div style="margin-top:6px">Rule matched: <b>{{ rc.rule }}</b></div>
@@ -112,13 +113,54 @@
       </details>
     </div>
 
+    {% set needs_carrier = gaps | selectattr('kind', 'equalto', 'carrier_record') | list %}
+    {% set show_form = gaps or documents %}
+    <details class="section proof-card{{ ' gap' if gaps }}" id="proof"{% if gaps %} open{% endif %}>
+      <summary>{{ 'Close the proof gap' if gaps else 'Proof you added' if documents else 'Add your own proof' }}<span class="hint">{% if gaps %}{{ gaps | length }} missing{% elif documents %}{{ documents | length }} added{% else %}Optional{% endif %}</span></summary>
+      <div class="body">
+        {% for g in gaps %}<div class="gap-row"><span class="st bad" aria-hidden="true">✕</span><div class="small"><b>{{ g.label }}</b><div class="muted">{{ g.how }}</div></div></div>{% endfor %}
+        {% for doc in documents %}
+        <div class="gap-row"><span class="st ok" aria-hidden="true">✓</span><div class="small" style="flex:1;min-width:0"><b style="overflow-wrap:anywhere">{{ doc.filename }}</b>
+          <div class="muted">{% if doc.doc_type == 'carrier_record' %}{{ doc.fields.carrier }} {{ doc.fields.tracking_number }}, delivered {{ doc.fields.delivered_on }} to {{ doc.fields.delivered_to }}{% else %}{{ 'Photo' if doc.doc_type == 'photo' else 'Document' }}{% endif %}{% if demo %} · demo keeps only its fingerprint{% endif %}</div></div>
+          <form method="post" action="/disputes/{{ d.dispute_id }}/documents/{{ doc.id }}/delete"><button class="secondary">Remove</button></form></div>
+        {% endfor %}
+        {% if demo and needs_carrier and not documents %}
+        <form method="post" action="/disputes/{{ d.dispute_id }}/documents/sample" class="sample-proof"><button>Add a sample carrier record</button> <span class="small muted">Made up for this demo. Watch the recommendation update.</span></form>
+        {% endif %}
+        <details class="add-proof"{% if gaps and not demo %} open{% endif %}><summary class="small"><b>Add a file you have</b></summary>
+        <form method="post" action="/disputes/{{ d.dispute_id }}/documents" enctype="multipart/form-data" class="proof-form">
+          <div class="row">
+            <label class="small">What is it?<br><select name="doc_type" data-doc-type>
+              <option value="carrier_record"{% if needs_carrier or not gaps %} selected{% endif %}>Carrier delivery record</option>
+              <option value="photo"{% if gaps and not needs_carrier and gaps[0].kind == 'photo' %} selected{% endif %}>Photo of the item</option>
+              <option value="other"{% if gaps and not needs_carrier and gaps[0].kind == 'other' %} selected{% endif %}>Other document</option></select></label>
+            <label class="small">File<br><input type="file" name="file" accept="application/pdf,image/jpeg,image/png,image/gif" required></label>
+          </div>
+          <div class="row" data-carrier-fields>
+            <label class="small">Carrier<br><select name="carrier">{% for x in carriers %}<option>{{ x }}</option>{% endfor %}</select></label>
+            <label class="small">Tracking number<br><input type="text" name="tracking_number" autocomplete="off"></label>
+            <label class="small">Shipped<br><input type="date" name="shipped_on" max="{{ today }}"></label>
+            <label class="small">Delivered<br><input type="date" name="delivered_on" max="{{ today }}"></label>
+            <label class="small wide">Delivered to, as shown on the record<br><input type="text" name="delivered_to" autocomplete="off"></label>
+          </div>
+          <label class="small check"><input type="checkbox" name="genuine" value="yes" required><span>This is a genuine record, and what I typed matches it.</span></label>
+          <div><button class="secondary">Add to this case</button> <span class="small muted">PDF, JPG, PNG or GIF, under 10 MB. The team re-runs by itself.</span></div>
+        </form></details>
+        <div class="muted small" style="margin-top:8px">Code checks the dates and the address. It can't confirm the file with the carrier, so your reply says who supplied it, and PayPal makes the final call.</div>
+      </div>
+    </details>
+
     <div class="card">
       <div class="card-head"><h3>What your reply will say</h3>
         {% set quoted = a.claims_kept | selectattr('call_only') | list | length %}
         <span class="small muted">{{ a.claims_kept | length - quoted }} proven{% if quoted %} · {{ quoted }} quoted from calls{% endif %}{% if a.claims_struck %} · {{ a.claims_struck | length }} struck{% endif %}</span></div>
       {% for c in a.claims_kept %}
         <div class="claim"><span class="ic">✓</span><div><div class="t">{{ c.text }}</div>
-          <div class="meta">{{ 'Quoted from a call, not proof that it happened:' if c.call_only else 'Proof:' }} {% for i in c.evidence_ids %}<span class="cite">{{ i }}</span> {% endfor %}</div></div></div>
+          <details class="claim-proof"><summary class="meta">{{ 'Quoted from a call, not proof that it happened:' if c.call_only else 'Proof:' }} {% for i in c.evidence_ids %}<span class="cite">{{ i }}</span> {% endfor %}</summary>
+            {% for i in c.evidence_ids %}{% set e = evidence | selectattr('id', 'equalto', i) | list | first %}{% if e %}
+            <div class="proof-row"><span class="cite">{{ e.id }}</span><div><b>{{ e.source }}</b><div class="muted">{{ e.summary }}</div>{% if e.content.text %}<div class="quote">“{{ e.content.text }}”</div>{% endif %}</div></div>
+            {% endif %}{% endfor %}
+          </details></div></div>
       {% endfor %}
       {% for c in a.claims_struck %}
         <div class="claim struck"><span class="ic">✕</span><div><div class="t">{{ c.text }}</div>
@@ -177,7 +219,7 @@
           <span class="badge {{ 'b-ok' if v == 'may_qualify' else 'b-bad' if v == 'excluded' else 'b-warn' }}">{{ 'May qualify' if v == 'may_qualify' else 'Likely excluded' if v == 'excluded' else 'Proof missing' if v == 'missing_proof' else 'Unclear' }}</span></div>
         <div class="small" style="margin-bottom:8px">{{ a.protection.summary }}</div>
         {% for c in a.protection.checks %}
-        <div class="small" style="padding:4px 0;border-top:1px solid var(--line-2)">{{ '✅' if c.state == 'pass' else '❌' if c.state == 'fail' else '❓' }} <b>{{ c.label }}</b>
+        <div class="small" style="padding:4px 0;border-top:1px solid var(--line-2)"><span class="st {{ 'ok' if c.state == 'pass' else 'bad' if c.state == 'fail' else 'q' }}" aria-hidden="true">{{ '✓' if c.state == 'pass' else '✕' if c.state == 'fail' else '?' }}</span><b>{{ c.label }}</b>
           <div class="muted">{{ c.why }}</div></div>
         {% endfor %}
         <div class="muted small" style="margin-top:8px">From PayPal's published US terms. PayPal alone decides eligibility.</div>
@@ -216,7 +258,7 @@
     </details>
 
     <details class="section">
-      <summary>Agent run log<span class="hint">{{ a.steps | length }} steps · {{ a.seconds }}s</span></summary>
+      <summary>Agent run log<span class="hint">{{ a.steps | length }} steps{% if a.seconds >= 1 %} · {{ a.seconds | round | int }}s{% endif %}</span></summary>
       <div class="body">
       <ol class="timeline small">
         {% for s in a.steps %}
@@ -262,10 +304,10 @@
       <form method="post" action="/disputes/{{ d.dispute_id }}/approve" class="stack">
         <label class="small" for="reply"><b>Your reply</b> <span class="muted">Built from proven claims. You can edit it.</span></label>
         <textarea id="reply" name="reply_text">{{ a.reply_text }}</textarea>
-        {% if 'provide_evidence' in allowed %}<button class="block" name="action" value="submit_evidence" data-confirm="Your reply and the list of your evidence go to PayPal. You can't take this back.">Approve &amp; submit evidence</button>{% endif %}
+        {% if 'provide_evidence' in allowed %}<button class="block" name="action" value="submit_evidence" data-confirm="Your reply, the list of your evidence{{ ' and the files you added' if documents and not demo }} go to PayPal. You can't take this back.">Approve &amp; submit evidence</button>{% endif %}
         {% if 'provide_supporting_info' in allowed and 'provide_evidence' not in allowed %}
           <button class="block" name="action" value="submit_supporting_info" data-confirm="Your reply and the list of your evidence go to PayPal's reviewer. You can't take this back.">Approve &amp; send case to PayPal</button>
-          <div class="muted small">PayPal is reviewing this case, so this goes to its reviewer as supporting information.</div>
+          <div class="muted small">PayPal is reviewing this case, so this goes to its reviewer as supporting information.{% if documents %} Your reply lists the files you added, but they aren't attached at this stage.{% endif %}</div>
         {% endif %}
         {% if 'send_message' in allowed %}<button class="secondary block" name="action" value="send_message" data-confirm="Your reply goes to the buyer as a message.">Send as a message instead</button>{% endif %}
       </form>

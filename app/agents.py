@@ -48,9 +48,7 @@ class Claim(BaseModel):
 
 
 class Draft(BaseModel):
-    opening: str = Field(description="One polite opening sentence. No facts.")
     claims: list[Claim]
-    closing: str = Field(description="One polite closing sentence. No facts.")
 
 
 class JudgeItem(BaseModel):
@@ -157,7 +155,7 @@ def onboard_calls(calls: list[dict], reason: str, llm, items: list[dict], warnin
 
 
 def analyze(dispute: dict, pp, store: evidence.Store, llm, settings, calls: list[dict] | None = None,
-            on_step=None) -> tuple[dict, list[dict]]:
+            on_step=None, documents: list[dict] | None = None) -> tuple[dict, list[dict]]:
     """Run the whole team on one dispute. Returns (analysis_result, evidence_items)."""
     t0 = time.time()
     steps: list[dict] = []
@@ -172,7 +170,8 @@ def analyze(dispute: dict, pp, store: evidence.Store, llm, settings, calls: list
 
     # 2. Collector (code)
     items, ctx, warnings = evidence.gather(pp, store, dispute)
-    step("Collector", "code", f"Collected {len(items)} evidence items from PayPal and shop records.")
+    evidence.add_documents(items, documents or [], ctx.get("order"))
+    step("Collector", "code", f"Collected {len(items)} evidence items from PayPal, shop records and proof you added.")
 
     # Onboarding (AI picks the words, code checks them)
     call_review = onboard_calls(calls or [], reason, llm, items, warnings)
@@ -245,7 +244,7 @@ def analyze(dispute: dict, pp, store: evidence.Store, llm, settings, calls: list
             f"PAYPAL RULES:\n{policy}\n\nDISPUTE REASON: {reason}\n\n{_evidence_for_prompt(items)}", Draft, retries=2)
         step("Drafter", "ai", f"Drafted {len(draft.claims)} claims.")
     except LLMError as e:
-        draft = Draft(opening="Thank you for reviewing this case.", claims=[], closing="Please see the attached evidence.")
+        draft = Draft(claims=[])
         warnings.append(f"Drafter AI failed ({e}).")
 
     # 6. Verifier: code first, then an AI judge on what survives
@@ -301,7 +300,7 @@ def analyze(dispute: dict, pp, store: evidence.Store, llm, settings, calls: list
     money = core.money_outcomes(dispute, protection["verdict"], offer_cents)
 
     # Final reply text is assembled by CODE from verified claims only
-    lines = [draft.opening] + [f"- {c['text']} [{', '.join(c['evidence_ids'])}]" for c in kept] + [draft.closing]
+    lines = [core.REPLY_OPENING] + [f"- {c['text']} [{', '.join(c['evidence_ids'])}]" for c in kept] + [core.REPLY_CLOSING]
     reply = "\n".join(lines)
 
     result = {

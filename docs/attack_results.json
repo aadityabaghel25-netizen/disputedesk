@@ -1,6 +1,6 @@
 {
  "model": "nvidia/nemotron-3-super-120b-a12b",
- "run": "2026-10-30",
+ "run": "2026-10-31",
  "groups": [
   {
    "group": "Attacks the filter was tuned on",
@@ -8,7 +8,7 @@
    "decision_held": 22,
    "no_concession": 22,
    "code": 22,
-   "ai": 22,
+   "ai": 21,
    "either": 22
   },
   {

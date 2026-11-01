@@ -132,8 +132,9 @@ Fallback if evidence submission fails in sandbox: use `send-message` + `make-off
 
 ## 10. Status (update every session)
 
-- **Last updated:** 2026-10-31. Onboarding agent for call recordings built and tested on the real model with made-up calls. Gnani batch speech-to-text tested live with a made-up two-voice call: key is in local `.env`, not yet on Render. Gnani's firewall needs a User-Agent header; files list is under `data`. Not committed yet.
+- **Last updated:** 2026-11-02 overnight. Built close-the-proof-gap and proof on every claim. Fixed a real thread bug: DB reads now take the lock (0 failures in 100 test runs, was 9 in 80). Command center UI polished. Reply opening and closing are now code-written, and claims can't cite flagged messages. Real model on hardened code: 20/20, 0 unproven, 4/4 injections, 74 claims / 6 struck; attacks 34/34 held, 1 false alarm in 22. Nothing committed since 9f00348. File attachment is untested on real sandbox.
 - **Don't run `scripts/eval.py --fake` casually:** it overwrites the real-model `docs/eval_results.md`. Restore with git if it happens.
+- **Gnani (Nov 1):** batch API tested live with made-up two-voice calls; firewall needs a User-Agent header; file list is under `data`. Key is in local `.env`, must be rotated (pasted in chat), keep it off the public Render demo.
 - **Oct 30:** first local Claude Code session.
 - **Oct 30 local session:** real AI connected. Key is **Nebius** (Token Factory, OpenAI-compatible), model
   `nvidia/nemotron-3-super-120b-a12b` (reasoning model: hidden thinking tokens count toward max_tokens, so default
@@ -205,8 +206,6 @@ Fallback if evidence submission fails in sandbox: use `send-message` + `make-off
 | 2026-10-24 | Chose DisputeDesk over GigShield / MilestoneLock / Haggle (least crowded, deepest PayPal use, banking-domain fit, no Payouts dependency) |
 | 2026-10-25 | Merged best features of winners into DisputeDesk (Prevent / Defend / Settle) |
 | 2026-10-25 | Python, not TypeScript (Ankit's comfort); REST for gaps in Python toolkit |
-| 2026-11-01 | App redesigned as agent command center around the dispute flow. Calls are a side source of evidence, so keep them out of the main pitch and judge path. Drop a call anywhere, background worker queue, live rail. AI labels speakers, so quotes stay out of the reply until the seller's one-click confirm. Recording consent is confirmed once and can be withdrawn under Guardrails |
-| 2026-10-31 | Onboarding agent added for call recordings (Gnani batch speech-to-text). Code selects a recording only when it mentions one open case; AI picks quotes and says helps/hurts; code keeps exact quotes from the other person only. A call shows what was said: consent required, seller reviews it, it never meets a PayPal requirement and doesn't change fight/settle. No voice approval or live phone line |
 | 2026-10-25 | AI provider kept swappable; start on NVIDIA Nemotron free key |
 | 2026-10-25 | **Not entering the Nebius x NVIDIA hackathon**. PayPal only |
 | 2026-10-29 | Starlette instead of FastAPI, SQLite instead of Postgres (simpler, testable offline); offline demo mode + FakeLLM as never-fail fallback |
@@ -220,3 +219,6 @@ Fallback if evidence submission fails in sandbox: use `send-message` + `make-off
 | 2026-10-30 | AI provider = Nebius Token Factory hosting Nemotron 3 Super (the key Ankit has); still swappable via .env |
 | 2026-10-30 | Buyer risk + deadlines + settlement limits stay in code; AI never decides them. Estimated deadline = create_time + 10 days, labelled est. |
 | 2026-10-30 | Ignore day-by-day timeline; move as fast as possible. Work moves to Ankit's local machine (Claude Code); CLAUDE.md is the handoff |
+| 2026-10-31 | Onboarding agent added for call recordings (Gnani batch speech-to-text). Code selects a recording only when it mentions one open case; AI picks quotes and says helps/hurts; code keeps exact quotes from the other person only. A call shows what was said: consent required, seller reviews it, it never meets a PayPal requirement and doesn't change fight/settle. No voice approval or live phone line |
+| 2026-11-01 | App redesigned as agent command center around the dispute flow. Calls are a side source of evidence, so keep them out of the main pitch and judge path. Drop a call anywhere, background worker queue, live rail. AI labels speakers, so quotes stay out of the reply until the seller's one-click confirm. Recording consent is confirmed once and can be withdrawn under Guardrails |
+| 2026-11-02 | Close the proof gap: seller adds a carrier record, photo or file. Code checks file type, dates and address; AI never reads the file. Public demo keeps only a fingerprint. Files attach only on provide-evidence, because the supporting-info part name is unclear in PayPal's spec |

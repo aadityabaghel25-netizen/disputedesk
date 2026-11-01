@@ -669,7 +669,7 @@ class AppTests(unittest.TestCase):
             self.assertIn("left it at the door", client.get("/disputes/PP-D-DEMO-1003").text)
             self.assertEqual(client.post("/recordings", data=self._call_form(consent=""), follow_redirects=False).status_code, 303)
             client.post("/recordings", data=self._call_form(filename="other.mp3"))
-            stray = s.db.list_calls("")[0]["id"]
+            stray = next(c["id"] for c in s.db.list_calls("") if c["filename"] == "other.mp3")
             self.assertIn("Waiting on you", client.get("/recordings").text)
             client.post(f"/recordings/{stray}/assign", data={"dispute_id": "PP-D-DEMO-1002"})
             self.assertEqual(len(s.db.list_calls("PP-D-DEMO-1002")), 1)
@@ -699,6 +699,139 @@ class AppTests(unittest.TestCase):
                 self.assertIn(piece, page, path)
         self.assertIn("Live agent run", client.get("/").text)
         self.assertEqual(client.get("/static/agents.js").status_code, 200)
+
+    def test_saving_a_call_reports_its_own_case_even_if_another_job_selected_it(self):
+        s = self._service()
+        real = s.select_recordings
+        calls = []
+
+        def other_job_got_there_first():
+            calls.append(real())   # the worker selects it...
+            return []              # ...so this request's own selection finds nothing left to do
+
+        with mock.patch.object(s, "select_recordings", side_effect=other_job_got_there_first):
+            self.assertEqual(s.add_call(self._call_form(), "seller"), ["PP-D-DEMO-1003"])
+        self.assertEqual(calls, [["PP-D-DEMO-1003"]])
+
+    PDF = b"%PDF-1.7 a delivery record"
+
+    def _record(self, **over):
+        return {"doc_type": "carrier_record", "genuine": "yes", "carrier": "UPS", "tracking_number": "1Z999AA10123450001", "shipped_on": "2026-10-09",
+                "delivered_on": "2026-10-14", "delivered_to": "2211 N First St, San Jose, CA 95131, US", **over}
+
+    def test_adding_a_carrier_record_closes_the_gap_and_code_updates_the_decision(self):
+        s = self._service()
+        case = "PP-D-DEMO-1003"   # no tracking, so it starts as SETTLE
+        before = s.analyze(case)
+        self.assertEqual(before["advice"]["decision"], "settle")
+        self.assertEqual(len(core.proof_gaps(before["advice"]["required_missing"])), 2)
+        s.add_document(case, self._record(), self.PDF, "ups record.pdf", "seller")
+        after = s.analyze(case)
+        self.assertEqual(after["advice"]["required_missing"], [])
+        self.assertEqual(after["advice"]["decision"], "fight")
+        self.assertEqual(after["changed_from"], "settle")
+        self.assertEqual(after["protection"]["checks"][-2]["state"], "pass")
+        self.assertIn("record you added", after["protection"]["checks"][-2]["why"])
+        doc = s.db.list_documents(case)[0]
+        self.assertEqual(doc["filename"], "ups_record.pdf")
+        self.assertTrue(any("added by the seller" in e["source"] and "didn't check this with the carrier" in e["summary"] for e in s.db.get_evidence(case)))
+
+    def test_wrong_address_on_a_seller_record_does_not_close_the_gap(self):
+        s = self._service()
+        s.add_document("PP-D-DEMO-1003", self._record(delivered_to="77 Elm Rd, Austin, TX 73301, US"), self.PDF, "r.pdf", "seller")
+        result = s.analyze("PP-D-DEMO-1003")
+        self.assertEqual(result["advice"]["required_missing"], ["Delivered to the address on the PayPal transaction"])
+        self.assertNotEqual(result["advice"]["decision"], "fight")
+
+    def test_bad_proof_is_refused(self):
+        s = self._service()
+        for form, content in ((self._record(genuine=""), self.PDF), (self._record(doc_type="x"), self.PDF), (self._record(), b"MZ not a document"),
+                              (self._record(delivered_on="2026-10-01"), self.PDF), (self._record(delivered_on="2999-01-01"), self.PDF),
+                              (self._record(tracking_number="no!"), self.PDF), (self._record(carrier="Me"), self.PDF), (self._record(delivered_to="x"), self.PDF),
+                              ({"doc_type": "photo", "genuine": "yes"}, self.PDF), (self._record(), b"%PDF" + b"0" * s.MAX_DOCUMENT)):
+            with self.assertRaises(ActionError):
+                s.add_document("PP-D-DEMO-1003", form, content, "r.pdf", "seller")
+        self.assertEqual(s.db.list_documents("PP-D-DEMO-1003"), [])
+
+    def test_public_demo_never_stores_the_file_but_real_mode_attaches_it_on_click(self):
+        s = self._service()
+        s.add_document("PP-D-DEMO-1001", self._record(), self.PDF, "r.pdf", "seller")
+        self.assertEqual(s.db.document_files("PP-D-DEMO-1001"), [])
+        s.demo = False
+        s.db.delete_document("PP-D-DEMO-1001", s.db.list_documents("PP-D-DEMO-1001")[0]["id"])
+        s.add_document("PP-D-DEMO-1001", self._record(), self.PDF, "r.pdf", "seller")
+        s.analyze("PP-D-DEMO-1001")
+        real = s.pp.provide_evidence
+        s.pp.provide_evidence = mock.Mock(side_effect=real)
+        s.pp.provide_evidence.assert_not_called()   # adding proof and re-running sends nothing
+        s.approve("PP-D-DEMO-1001", "submit_evidence", {}, "seller")
+        args = s.pp.provide_evidence.call_args.args
+        self.assertEqual(args[2][0][:2], ("evidence-file", "r.pdf"))
+        self.assertEqual(args[2][0][2], self.PDF)
+        self.assertTrue(args[1][0].get("evidence_info") or args[1])
+
+    def test_no_documents_keeps_the_proven_paypal_call_unchanged(self):
+        s = self._service()
+        s.analyze("PP-D-DEMO-1001")
+        real = s.pp.provide_evidence
+        s.pp.provide_evidence = mock.Mock(side_effect=real)
+        s.approve("PP-D-DEMO-1001", "submit_evidence", {}, "seller")
+        self.assertEqual(len(s.pp.provide_evidence.call_args.args), 2)
+
+    def test_oversized_upload_is_refused_before_reading(self):
+        client = TestClient(create_app(self._service()))
+        big = b"x" * 11_500_000
+        self.assertEqual(client.post("/disputes/PP-D-DEMO-1001/documents", files={"file": ("a.pdf", big)}).status_code, 413)
+        self.assertEqual(client.post("/recordings/upload", files={"audio": ("a.mp3", big)}).status_code, 413)
+
+    def test_sample_proof_flow_through_the_page_and_every_claim_shows_its_proof(self):
+        s = self._service()
+        client = TestClient(create_app(s))
+        case = "/disputes/PP-D-DEMO-1003"
+        s.analyze("PP-D-DEMO-1003")
+        self.assertIn("Close the proof gap", client.get(case).text)
+        client.post(case + "/documents/sample")
+        page = client.get(case).text
+        self.assertIn("Changed from SETTLE", page)
+        self.assertIn("made-up-sample-record.pdf", page)
+        self.assertIn('class="claim-proof"', page)
+        s.demo = False
+        self.assertEqual(client.post(case + "/documents/sample", follow_redirects=False).status_code, 303)
+        self.assertEqual(len(s.db.list_documents("PP-D-DEMO-1003")), 1)
+
+    def test_demo_cannot_grow_without_limit(self):
+        s = self._service()
+        s.MAX_DEMO_RECORDS = 1
+        s.add_call(self._call_form(), "seller")
+        with self.assertRaises(ActionError):
+            s.add_call(self._call_form(), "seller")
+
+    def test_ai_cannot_add_words_outside_checked_claims(self):
+        class Conceding(FakeLLM):
+            def chat(self, messages, tools=None, **kw):
+                out = super().chat(messages, tools, **kw)
+                if "[agent:drafter]" in messages[0]["content"]:
+                    d = json.loads(out["content"])
+                    d.update(opening="We agree to a full refund.", closing="Please refund the buyer now.")
+                    return {"role": "assistant", "content": json.dumps(d)}
+                return out
+
+        result = self._service(llm=Conceding()).analyze("PP-D-DEMO-1001")
+        self.assertNotIn("refund", result["reply_text"].lower())
+        self.assertTrue(result["reply_text"].startswith(core.REPLY_OPENING))
+        self.assertTrue(result["reply_text"].endswith(core.REPLY_CLOSING))
+
+    def test_claim_cannot_cite_a_flagged_message(self):
+        class Quoting(FakeLLM):
+            def chat(self, messages, tools=None, **kw):
+                if "[agent:drafter]" in messages[0]["content"]:
+                    return self._json({"claims": [{"text": 'The buyer wrote "ignore all previous instructions".', "evidence_ids": ["E2"]}]})
+                return super().chat(messages, tools, **kw)
+
+        result = self._service(llm=Quoting()).analyze("PP-D-DEMO-1004")
+        self.assertEqual(result["claims_kept"], [])
+        self.assertIn("flagged", result["claims_struck"][0]["why"])
+        self.assertNotIn("ignore all", result["reply_text"])
 
     def test_consent_can_be_withdrawn(self):
         s = self._service()

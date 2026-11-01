@@ -52,7 +52,7 @@ If port 8000 is busy: `lsof -ti:8000 | xargs kill`.
 - `app/config.py` settings from `.env` (no PayPal keys → demo mode; no AI key → FakeLLM)
 - `app/paypal.py` REST client (stdlib urllib). Read calls + human-only writes + webhook verify
 - `app/demo.py` offline PayPal stand-in (`data/demo_disputes.json`)
-- `app/evidence.py` Collector, `{paid+N}` date resolver, per-reason requirement checks, mock Store
+- `app/evidence.py` Collector, `{paid+N}` date resolver, per-reason requirement checks, mock Store, seller-added proof
 - `app/core.py` deterministic rules: cents, deadlines, allowed actions (from dispute `links`),
   policy lookup (`policy/dispute_rules.md`), injection flags, claim fact-check, fight/settle/review
 - `app/llm.py` OpenAI-compatible client, `ask_json` (pydantic structured output), tool loop, FakeLLM

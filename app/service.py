@@ -4,6 +4,7 @@ the human approval step. The web routes in main.py stay thin and call these.
 """
 
 import hashlib
+import json
 import queue
 import re
 import threading
@@ -47,6 +48,7 @@ class Service:
         self.running: set[str] = set()
         self.live: dict[str, dict] = {}   # case id -> the agent working on it right now
         self._call_queue: queue.Queue = queue.Queue()
+        self._select_lock = threading.Lock()   # web requests and the call worker both select recordings
         self._call_worker: threading.Thread | None = None
         self.db.fail_interrupted_calls()
         self._lock = threading.Lock()
@@ -214,6 +216,9 @@ class Service:
         fresh = self.add_sample_recordings() if not self.db.all_calls() else []
         for dispute_id in ([d["dispute_id"] for d in self.db.list_disputes()] if first_visit else fresh):
             self.analyze_quietly(dispute_id)
+        if first_visit:
+            for u in self.board_data()["unplanned"][:-1]:
+                self.autoplan("system", only=u["dispute_id"])
 
     def start_watcher(self) -> None:
         minutes = self.settings.watch_minutes
@@ -357,8 +362,11 @@ class Service:
                 dispute = self.pp.get_dispute(dispute_id)
                 self.db.upsert_dispute(dispute)
             self.select_recordings()
-            result, items = agents.analyze(dispute, self.pp, self.store, self.llm, self.settings,
-                                           calls=self.db.list_calls(dispute_id), on_step=on_step)
+            before = self.db.latest_analysis(dispute_id)
+            result, items = agents.analyze(dispute, self.pp, self.store, self.llm, self.settings, calls=self.db.list_calls(dispute_id),
+                                           on_step=on_step, documents=self.db.list_documents(dispute_id))
+            if before and before["advice"]["decision"] != result["advice"]["decision"]:
+                result["changed_from"] = before["advice"]["decision"]
             self.db.replace_evidence(dispute_id, items)
             aid = self.db.save_analysis(dispute_id, result)
             self.db.audit("ai", "analysis", dispute_id, {
@@ -378,6 +386,76 @@ class Service:
             self.analyze(dispute_id, pause)
         except Exception:
             pass   # already written to the audit log
+
+    # -- proof the seller adds: closes the gap the pre-flight finds. Nothing here can write to PayPal. ----
+
+    CARRIERS = ("UPS", "USPS", "FEDEX", "DHL", "OTHER")
+    MAX_DOCUMENT = 10_000_000
+    MAX_DOCS_PER_CASE = 5
+    MAX_DEMO_RECORDS = 60    # the public demo has no login, so it can't grow without limit
+
+    def _carrier_fields(self, form: dict) -> dict:
+        carrier, tracking = form.get("carrier"), (form.get("tracking_number") or "").strip().upper()
+        if carrier not in self.CARRIERS:
+            raise ActionError("Choose the carrier.")
+        if not re.fullmatch(r"[A-Z0-9-]{6,40}", tracking):
+            raise ActionError("Enter the tracking number exactly as the carrier shows it.")
+        shipped, delivered = core.parse_time(form.get("shipped_on") or ""), core.parse_time(form.get("delivered_on") or "")
+        today = datetime.now(timezone.utc).date()
+        if not shipped or not delivered:
+            raise ActionError("Enter the shipped and delivered dates from the record.")
+        if delivered.date() < shipped.date() or delivered.date() > today:
+            raise ActionError("Check the dates. Delivery can't be before shipping or in the future.")
+        address = " ".join((form.get("delivered_to") or "").split())
+        if not 8 <= len(address) <= 200:
+            raise ActionError("Enter the delivery address shown on the record.")
+        return {"carrier": carrier, "tracking_number": tracking, "shipped_on": shipped.date().isoformat(),
+                "delivered_on": delivered.date().isoformat(), "delivered_to": address}
+
+    def add_document(self, dispute_id: str, form: dict, content: bytes, filename: str, actor: str) -> None:
+        if not self.db.get_dispute(dispute_id):
+            raise ActionError("Unknown dispute.")
+        if form.get("genuine") != "yes":
+            raise ActionError("Confirm that this is a genuine record. Your reply relies on it.")
+        doc_type = form.get("doc_type")
+        if doc_type not in ("carrier_record", "photo", "other"):
+            raise ActionError("Choose what kind of proof this is.")
+        if not content or len(content) > self.MAX_DOCUMENT:
+            raise ActionError("Choose a file under 10 MB.")
+        mime = core.sniff_file_type(content)
+        if not mime or (doc_type == "photo" and not mime.startswith("image/")):
+            raise ActionError("Use a PDF, JPG, PNG or GIF file." if doc_type != "photo" else "Use a JPG, PNG or GIF photo.")
+        fields = self._carrier_fields(form) if doc_type == "carrier_record" else {}
+        if len(self.db.list_documents(dispute_id)) >= self.MAX_DOCS_PER_CASE:
+            raise ActionError(f"A case can hold {self.MAX_DOCS_PER_CASE} added documents. Remove one first.")
+        if self.demo and self.db.count_documents() >= self.MAX_DEMO_RECORDS:
+            raise ActionError("The demo is full for now.")
+        name = re.sub(r"[^\w.-]+", "_", filename or "document")[-80:] or "document"
+        fingerprint = hashlib.sha256(content).hexdigest()
+        # The public demo keeps only the fingerprint, so it can't be used to host files
+        doc_id = self.db.add_document(dispute_id, actor, doc_type, name, mime, fingerprint, len(content), fields, None if self.demo else content)
+        self.db.audit(actor, "document_added", dispute_id, {"document_id": doc_id, "type": doc_type, "sha256": fingerprint})
+
+    def add_sample_document(self, dispute_id: str, actor: str) -> None:
+        """Lets anyone see the gap close with no file to hand. Made up, labelled, and demo only."""
+        dispute = self.db.get_dispute(dispute_id)
+        if not self.demo or not dispute:
+            raise ActionError("Sample proof is only for the demo.")
+        if self.db.list_documents(dispute_id):
+            raise ActionError("This case already has added proof.")
+        _, order, _, paid = evidence.link_to_order(self.pp, dispute)
+        paid = paid or datetime.now(timezone.utc).date() - timedelta(days=7)
+        today = datetime.now(timezone.utc).date()
+        fields = {"carrier": "UPS", "tracking_number": "1Z999AA10123450001", "shipped_on": min(paid + timedelta(days=1), today).isoformat(),
+                  "delivered_on": min(paid + timedelta(days=5), today).isoformat(), "delivered_to": evidence.paypal_address_text(order) if order else "2211 N First St, San Jose, CA 95131, US"}
+        doc_id = self.db.add_document(dispute_id, actor, "carrier_record", "made-up-sample-record.pdf", "application/pdf",
+                                      hashlib.sha256(json.dumps(fields).encode()).hexdigest(), 0, fields, None)
+        self.db.audit(actor, "document_added", dispute_id, {"document_id": doc_id, "type": "carrier_record", "sample": True})
+
+    def remove_document(self, dispute_id: str, doc_id: int, actor: str) -> None:
+        if not self.db.delete_document(dispute_id, doc_id):
+            raise ActionError("That document is already gone.")
+        self.db.audit(actor, "document_removed", dispute_id, {"document_id": doc_id})
 
     # -- call recordings: the library the onboarding agent selects from. Nothing here can write to PayPal. ----
 
@@ -410,16 +488,17 @@ class Service:
         put a stranger's call in a case. No reference, or more than one case, stays for the seller. Returns case ids."""
         cases = [d for d in self.db.list_disputes() if not core.dispute_outcome(d)]
         selected = []
-        for call in self.db.list_calls(""):
-            if call["status"] != "ready":
-                continue
-            text = f"{call['filename']}\n{call['transcript']}"
-            hits = {d["dispute_id"]: label for d in cases if (label := core.find_reference(text, self._case_references(d)))}
-            if len(hits) == 1:
-                (dispute_id, label), = hits.items()
-                self.db.assign_call(call["id"], dispute_id, label)
-                self.db.audit("system", "call_selected", dispute_id, {"call_id": call["id"], "matched_on": label})
-                selected.append(dispute_id)
+        with self._select_lock:
+            for call in self.db.list_calls(""):
+                if call["status"] != "ready":
+                    continue
+                text = f"{call['filename']}\n{call['transcript']}"
+                hits = {d["dispute_id"]: label for d in cases if (label := core.find_reference(text, self._case_references(d)))}
+                if len(hits) == 1:
+                    (dispute_id, label), = hits.items()
+                    self.db.assign_call(call["id"], dispute_id, label)
+                    self.db.audit("system", "call_selected", dispute_id, {"call_id": call["id"], "matched_on": label})
+                    selected.append(dispute_id)
         return list(dict.fromkeys(selected))
 
     def _listen_for(self) -> list[str]:
@@ -605,6 +684,8 @@ class Service:
         """Save a checked recording to the library, then let code select its case. Returns the case ids it selected."""
         if form.get("consent") != "yes":
             raise ActionError("Confirm that everyone on the call agreed to recording. Some US states, including California, require this.")
+        if self.demo and len(self.db.all_calls()) >= self.MAX_DEMO_RECORDS:
+            raise ActionError("The demo is full for now.")
         party = form.get("party")
         if party not in self.CALL_PARTIES:
             raise ActionError("Choose who the call was with.")
@@ -627,7 +708,9 @@ class Service:
         call_id = self.db.add_call(actor, party, day.date().isoformat(), transcript, origin, fingerprint, (form.get("filename") or "")[:120])
         self.db.audit(actor, "call_added", None, {"call_id": call_id, "party": party, "consent_confirmed": True,
                                                   "sha256": hashlib.sha256(transcript.encode()).hexdigest()})
-        return self.select_recordings()
+        self.select_recordings()
+        dispute_id = self.db.get_call(call_id)["dispute_id"]   # this call's own case, even if another job selected it first
+        return [dispute_id] if dispute_id else []
 
     def add_sample_recordings(self) -> list[str]:
         day, selected = (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat(), []
@@ -668,14 +751,15 @@ class Service:
             notes = core.build_supporting_notes(text, self.db.get_evidence(dispute_id))
             options = core.evidence_payload_options(dispute, self.db.get_evidence(dispute_id), notes)
             for n, payload in enumerate(options, 1):
+                files = [("evidence-file", f["filename"], f["content"], f["mime"]) for f in self.db.document_files(dispute_id)]
                 try:
-                    result = self.pp.provide_evidence(dispute_id, payload)
+                    result = self.pp.provide_evidence(dispute_id, payload, files) if files else self.pp.provide_evidence(dispute_id, payload)
                     break
                 except PayPalError as e:
                     if n == len(options) or not e.has_issue("EVIDENCE_TYPE_IS_NOT_ALLOWED"):
                         raise
                     self.db.audit(actor, "evidence_type_refused", dispute_id, {"evidence_type": payload[0]["evidence_type"]})
-            details = {"evidence_types": [p["evidence_type"] for p in payload],
+            details = {"evidence_types": [p["evidence_type"] for p in payload], "files": len(files),
                        "edited_by_seller": _edited(text, analysis)}
 
         elif action == "submit_supporting_info":

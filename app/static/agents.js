@@ -77,9 +77,9 @@
     }
   }
 
-  function typingInReply() {
-    const reply = $('reply');
-    return reply && reply.value !== reply.defaultValue;
+  function sellerIsTyping() {
+    return [...document.querySelectorAll('main textarea, main input')].some(f =>
+      f.type === 'checkbox' ? f.checked !== f.defaultChecked : f.type !== 'hidden' && f.value !== f.defaultValue);
   }
 
   // Pages show saved results, so reload once the work behind them finishes. Never over a reply being edited.
@@ -97,7 +97,7 @@
     const affectsPage = here ? (doneRuns.some(r => r.dispute_id === here) || doneCalls.some(c => c.dispute_id === here)) :
       document.body.dataset.path === '/' || document.body.dataset.path === '/recordings';
     if (!affectsPage) return;
-    if (typingInReply()) toast('The agents updated this case.', location.pathname, 'Reload');
+    if (sellerIsTyping()) toast('The agents have new results.', location.pathname, 'Reload');
     else location.reload();
   }
 
@@ -196,6 +196,14 @@
     $('consent-no').addEventListener('click', () => { pendingFiles = null; $('consent-dialog').close(); });
     document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
   }
+
+  // The carrier fields only matter for a carrier record
+  document.querySelectorAll('[data-doc-type]').forEach(select => {
+    const fields = select.form.querySelector('[data-carrier-fields]');
+    const show = () => { fields.hidden = select.value !== 'carrier_record'; };
+    select.addEventListener('change', show);
+    show();
+  });
 
   wire();
   poll();

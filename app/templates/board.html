@@ -7,9 +7,9 @@
 <style>
   #scheduler { height: 240px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
   .b-sch-event.dd-late, .b-sch-event.dd-critical, .b-sch-event.dd-overdue { background: var(--bad) !important; color: #fff !important; }
-  .b-sch-event.dd-soon { background: #c98a00 !important; color: #fff !important; }
+  .b-sch-event.dd-soon { background: #9a6700 !important; color: #fff !important; }
   .b-sch-event.dd-ok { background: var(--ok) !important; color: #fff !important; }
-  .b-sch-event { opacity: 1 !important; }
+  .b-sch-event, .b-sch-event-wrap { opacity: 1 !important; }   /* the library can leave the last block stuck mid fade-in */
   .b-sch-event .dd-block, .b-sch-event .dd-block * { color: #fff !important; }
   .dd-block { font-size: 12px; line-height: 1.3; white-space: normal; }
   .tl { position: relative; }
@@ -20,7 +20,7 @@
   .tl-track { position: relative; flex: 1; height: 52px; }
   .tl-bar { position: absolute; top: 14px; height: 24px; border-radius: 6px; font-size: 12px; font-weight: 600;
             padding: 3px 8px; white-space: nowrap; overflow: hidden; color: #fff; }
-  .tl-bar.ok { background: var(--ok); } .tl-bar.soon { background: #c98a00; }
+  .tl-bar.ok { background: var(--ok); } .tl-bar.soon { background: #9a6700; }
   .tl-bar.critical, .tl-bar.overdue { background: var(--bad); }
   .tl-bar.est { background-image: repeating-linear-gradient(45deg, transparent 0 6px, rgba(255,255,255,.18) 6px 12px); }
   .tl-today { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--brand); z-index: 2; }
@@ -39,7 +39,7 @@
 </div></div>
 
 {% if unplanned %}
-<div class="banner err"><span>⚠ <b>{{ unplanned | length }} {{ 'case has' if unplanned | length == 1 else 'cases have' }} a deadline but no time planned:</b>
+<div class="banner err"><span class="alert-mark" aria-hidden="true">!</span><span><b>{{ unplanned | length }} {{ 'case has' if unplanned | length == 1 else 'cases have' }} a deadline but no time planned:</b>
   {% for u in unplanned %}<a class="mono" href="/disputes/{{ u.dispute_id }}">{{ u.dispute_id }}</a> ({{ u.amount }}, {{ u.readiness | lower }}){{ ', ' if not loop.last }}{% endfor %}</span>
   <form method="post" action="/board/autoplan" style="margin-left:auto;flex:none"><button style="white-space:nowrap">Plan them for me</button></form></div>
 {% endif %}
