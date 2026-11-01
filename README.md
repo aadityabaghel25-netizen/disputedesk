@@ -55,7 +55,7 @@ Existing tools often submit automatically and charge a share of what they recove
 - Buyers who dispute most of their orders never get a settlement suggestion.
 
 **Prevent**
-- When a payment completes, the shop's tracking number is added to PayPal automatically.
+- When PayPal reports a completed payment, code adds the shop's tracking number to the order. Adding tracking has run on the real sandbox. The automatic trigger has only been tested offline so far.
 
 **Never miss a deadline**
 - A Bryntum board shows who works on what, and flags any case with a deadline but no time planned.
@@ -75,6 +75,7 @@ Existing tools often submit automatically and charge a share of what they recove
 | AI model | **Real** with a key. Without one, an offline rule-based stand-in runs, so the demo can't fail. |
 | Shop orders, chats and carrier records | **Simulated** in `data/store.json`. Sandbox tracking numbers have no real deliveries. |
 | Sample disputes in demo mode | **Simulated.** Dates stay relative to today. |
+| Prevent | **Partly real.** Adding tracking has run on the sandbox through `scripts/setup.py`. The webhook that starts it automatically is tested offline only, and the public demo doesn't run it. |
 | Files you add | **Real** with PayPal keys: attached when PayPal asks for evidence. In the demo, only a fingerprint is kept, and the sample carrier record is made up. |
 | Call recordings in demo mode | **Simulated.** Made-up transcripts, labelled as samples. Audio upload needs a Gnani key. |
 
@@ -86,6 +87,7 @@ Existing tools often submit automatically and charge a share of what they recove
 | Look up buyer history | AI | The only tool the AI gets. Read-only |
 | Submit evidence, send a message, make an offer | You | Only after your click, and only if PayPal offers the action |
 | Accept a claim and refund | You | You must type ACCEPT |
+| Add the shop's tracking number after a payment | Code | The one PayPal write with no click. No AI and no money involved |
 | Any PayPal write | AI | Blocked: no such tool exists |
 
 Also: a claim can't cite a message flagged as manipulation, buyer text is treated as untrusted data, webhook signatures are verified, cross-site form posts are blocked, and every action goes into a hash-chained audit log.

@@ -358,6 +358,7 @@
     dialog.showModal();
   }));
   document.getElementById('confirm-no').onclick = () => dialog.close();
+  window.addEventListener('pageshow', e => { if (e.persisted) location.reload(); });   // Back button must not restore a frozen "Sending…"
   document.getElementById('confirm-yes').onclick = () => {
     dialog.close();
     const btn = pending, form = btn.form;
